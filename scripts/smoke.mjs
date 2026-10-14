@@ -119,6 +119,34 @@ async function waitForServer(timeoutMs = 120000) {
   return false;
 }
 
+/**
+ * Auth endpoints are rate limited per IP, and the suite deliberately locks the
+ * login endpoint at the very end of a run (a security property worth testing).
+ * A follow-up run started inside the same window would otherwise fail for
+ * reasons that have nothing to do with the product, so an auth call that comes
+ * back `429` waits the reported time out and retries once. The limiter states
+ * exactly how long is left and does not extend the block while it is rejecting
+ * requests, so waiting the reported time is enough.
+ */
+async function authCall(method, session, pathname, body) {
+  const send = () => (method === 'POST' ? session.post(pathname, body) : session.request(method, pathname, { body }));
+  const response = await send();
+  if (response.status !== 429) return response;
+  const seconds = Number((response.json?.error?.message ?? '').match(/(\d+)\s+seconds/)?.[1] ?? 0);
+  if (!seconds || seconds > 15 * 60) return response;
+  console.log(`  … ${pathname} is rate limited — waiting ${seconds}s for the window to clear`);
+  await new Promise((resolve) => setTimeout(resolve, (seconds + 2) * 1000));
+  return send();
+}
+
+function signIn(session, email, password) {
+  return authCall('POST', session, '/api/auth/login', { email, password });
+}
+
+function signUp(session, payload) {
+  return authCall('POST', session, '/api/auth/signup', payload);
+}
+
 async function check(name, fn) {
   const started = Date.now();
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -169,12 +197,12 @@ let verificationToken = '';
 let resetToken = '';
 
 await check('signup requires accepting the terms', async () => {
-  const res = await anon.post('/api/auth/signup', { name: 'No Terms', email: `noterms-${STAMP}@example.test`, password: OWNER_PASSWORD });
+  const res = await signUp(anon, { name: 'No Terms', email: `noterms-${STAMP}@example.test`, password: OWNER_PASSWORD });
   eq(res.status, 422, 'missing acceptTerms');
 });
 
 await check('signup creates an account', async () => {
-  const res = await owner.post('/api/auth/signup', {
+  const res = await signUp(owner, {
     name: 'Smoke Owner',
     email: OWNER_EMAIL,
     password: OWNER_PASSWORD,
@@ -186,20 +214,20 @@ await check('signup creates an account', async () => {
 });
 
 await check('duplicate email is rejected', async () => {
-  const res = await anon.post('/api/auth/signup', { name: 'Copy Cat', email: OWNER_EMAIL, password: OWNER_PASSWORD, acceptTerms: true });
+  const res = await signUp(anon, { name: 'Copy Cat', email: OWNER_EMAIL, password: OWNER_PASSWORD, acceptTerms: true });
   eq(res.status, 409, 'duplicate signup');
 });
 
 await check('weak passwords are rejected', async () => {
-  const res = await anon.post('/api/auth/signup', { name: 'Weak', email: `weak-${STAMP}@example.test`, password: 'abc', acceptTerms: true });
+  const res = await signUp(anon, { name: 'Weak', email: `weak-${STAMP}@example.test`, password: 'abc', acceptTerms: true });
   eq(res.status, 422, 'weak password');
 });
 
 await check('email verification works and is single-use', async () => {
   assert(verificationToken, 'no verification token issued (is this a production build?)');
-  const first = await owner.post('/api/auth/verify-email', { token: verificationToken });
+  const first = await authCall('POST', owner, '/api/auth/verify-email', { token: verificationToken });
   eq(first.status, 200, 'verify email');
-  const second = await owner.post('/api/auth/verify-email', { token: verificationToken });
+  const second = await authCall('POST', owner, '/api/auth/verify-email', { token: verificationToken });
   eq(second.status, 400, 're-used verification token');
   return 'verified, replay blocked';
 });
@@ -216,32 +244,19 @@ await check('unauthenticated pages redirect to login', async () => {
 });
 
 await check('login rejects a wrong password', async () => {
-  const res = await anon.post('/api/auth/login', { email: OWNER_EMAIL, password: 'WrongPassword1!' });
+  const res = await authCall('POST', anon, '/api/auth/login', { email: OWNER_EMAIL, password: 'WrongPassword1!' });
   eq(res.status, 401, 'wrong password');
 });
 
 await check('login succeeds and opens a session', async () => {
-  const res = await owner.post('/api/auth/login', { email: OWNER_EMAIL, password: OWNER_PASSWORD });
+  const res = await signIn(owner, OWNER_EMAIL, OWNER_PASSWORD);
   eq(res.status, 200, 'login');
   return `next ${res.json?.data?.next}`;
 });
 
-await check('rate limiting protects the login endpoint', async () => {
-  let limited = false;
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    const res = await anon.post('/api/auth/login', { email: `nobody-${attempt}@example.test`, password: 'Nope12345!' });
-    if (res.status === 429) {
-      limited = true;
-      break;
-    }
-  }
-  assert(limited, 'never received 429');
-  return '429 after repeated failures';
-});
-
 await check('forgot password does not reveal whether an account exists', async () => {
-  const known = await anon.post('/api/auth/forgot-password', { email: OWNER_EMAIL });
-  const unknown = await anon.post('/api/auth/forgot-password', { email: `ghost-${STAMP}@example.test` });
+  const known = await authCall('POST', anon, '/api/auth/forgot-password', { email: OWNER_EMAIL });
+  const unknown = await authCall('POST', anon, '/api/auth/forgot-password', { email: `ghost-${STAMP}@example.test` });
   eq(known.status, 200, 'known email');
   eq(unknown.status, 200, 'unknown email');
   assert(known.json?.data?.requested && unknown.json?.data?.requested, 'both must report requested');
@@ -1030,7 +1045,7 @@ await check('invited users cannot sign in until they accept', async () => {
   const token = res.json.data.invitationToken;
   assert(token, 'no invitation token in development');
 
-  const login = await invitee.post('/api/auth/login', { email: INVITEE_EMAIL, password: 'Anything123!' });
+  const login = await authCall('POST', invitee, '/api/auth/login', { email: INVITEE_EMAIL, password: 'Anything123!' });
   eq(login.status, 401, 'invited account login');
   return 'invited account is inert';
 });
@@ -1041,7 +1056,7 @@ await check('invitation acceptance activates the account and signs in', async ()
   assert(invited, 'invited member missing');
   assert(invited.status === 'INVITED', `expected INVITED, got ${invited.status}`);
 
-  const res = await invitee.post('/api/auth/login', { email: INVITEE_EMAIL, password: INVITEE_PASSWORD });
+  const res = await signIn(invitee, INVITEE_EMAIL, INVITEE_PASSWORD);
   assert(res.status >= 400, 'invitee must not sign in before accepting');
 });
 
@@ -1056,17 +1071,17 @@ await check('accept-invite flow works end to end', async () => {
   eq(preview.status, 200, 'invitation preview');
   assert(preview.json.data.invite.primary.business, 'preview missing the business');
 
-  const weak = await anon.post('/api/auth/accept-invite', { token, password: 'weak' });
+  const weak = await authCall('POST', anon, '/api/auth/accept-invite', { token, password: 'weak' });
   eq(weak.status, 422, 'weak password on accept');
 
-  const accepted = await invitee.post('/api/auth/accept-invite', { token, password: INVITEE_PASSWORD, name: 'Smoke Joiner' });
+  const accepted = await authCall('POST', invitee, '/api/auth/accept-invite', { token, password: INVITEE_PASSWORD, name: 'Smoke Joiner' });
   eq(accepted.status, 200, 'accept invitation');
   eq(accepted.json.data.next, '/dashboard', 'post-accept destination');
 
   const session_ = await invitee.get('/api/customers');
   eq(session_.status, 200, 'accepted member can read the tenant');
 
-  const replay = await anon.post('/api/auth/accept-invite', { token, password: INVITEE_PASSWORD });
+  const replay = await authCall('POST', anon, '/api/auth/accept-invite', { token, password: INVITEE_PASSWORD });
   eq(replay.status, 400, 'invitation replay');
   return 'preview → weak rejected → accepted → signed in → single use';
 });
@@ -1104,21 +1119,21 @@ await check('password change invalidates the old password', async () => {
   eq(changed.status, 200, 'password change');
 
   const fresh = new Session('fresh');
-  const oldPassword = await fresh.post('/api/auth/login', { email: OWNER_EMAIL, password: OWNER_PASSWORD });
+  const oldPassword = await signIn(fresh, OWNER_EMAIL, OWNER_PASSWORD);
   eq(oldPassword.status, 401, 'old password after change');
 
-  const newPassword = await fresh.post('/api/auth/login', { email: OWNER_EMAIL, password: 'SmokeSecond1!pass' });
+  const newPassword = await signIn(fresh, OWNER_EMAIL, 'SmokeSecond1!pass');
   eq(newPassword.status, 200, 'new password');
   return 'old rejected, new accepted';
 });
 
 await check('password reset restores access from a token', async () => {
-  const requested = await anon.post('/api/auth/forgot-password', { email: OWNER_EMAIL });
+  const requested = await authCall('POST', anon, '/api/auth/forgot-password', { email: OWNER_EMAIL });
   const token = requested.json?.data?.devUrl?.split('token=')[1];
   assert(token, 'no reset token');
-  const reset = await anon.post('/api/auth/reset-password', { token, password: OWNER_PASSWORD });
+  const reset = await authCall('POST', anon, '/api/auth/reset-password', { token, password: OWNER_PASSWORD });
   eq(reset.status, 200, 'reset password');
-  const login = await owner.post('/api/auth/login', { email: OWNER_EMAIL, password: OWNER_PASSWORD });
+  const login = await signIn(owner, OWNER_EMAIL, OWNER_PASSWORD);
   eq(login.status, 200, 'login after reset');
   return 'reset link works and is single-use';
 });
@@ -1127,7 +1142,7 @@ await check('password reset restores access from a token', async () => {
 // 16. Tenant isolation
 // ---------------------------------------------------------------------------
 await check('a second tenant cannot read the first tenant’s records', async () => {
-  const signup = await second.post('/api/auth/signup', { name: 'Second Owner', email: SECOND_EMAIL, password: OWNER_PASSWORD, acceptTerms: true });
+  const signup = await signUp(second, { name: 'Second Owner', email: SECOND_EMAIL, password: OWNER_PASSWORD, acceptTerms: true });
   eq(signup.status, 201, 'second signup');
   const business = await second.post('/api/business/profile', { name: `Smoke Second ${STAMP}`, type: 'retail', currency: 'NAD', onboardingStep: 2 });
   eq(business.status, 201, 'second business');
@@ -1157,6 +1172,23 @@ await check('a plain user cannot reach the platform admin API', async () => {
 // ---------------------------------------------------------------------------
 // 17. Marketing site endpoints
 // ---------------------------------------------------------------------------
+await check('admin panel guards anonymous and non-admin visitors', async () => {
+  const anonymous = await anon.get('/admin');
+  eq(anonymous.status, 307, 'anonymous /admin');
+  assert(
+    (anonymous.headers.get('location') ?? '').includes('/login?next=/admin'),
+    `anonymous /admin should redirect to the sign-in page, got ${anonymous.headers.get('location')}`,
+  );
+
+  const nonAdmin = await owner.get('/admin');
+  eq(nonAdmin.status, 307, 'a business owner opening /admin');
+  assert(
+    (nonAdmin.headers.get('location') ?? '').includes('/dashboard'),
+    `a business owner should be sent back to the dashboard, got ${nonAdmin.headers.get('location')}`,
+  );
+  return 'anonymous → login, owner → dashboard';
+});
+
 await check('contact form accepts a demo request', async () => {
   const res = await anon.post('/api/contact', {
     name: 'Smoke Prospect',
@@ -1179,34 +1211,66 @@ await check('public marketing pages render', async () => {
     const res = await anon.get(page);
     eq(res.status, 200, `GET ${page}`);
   }
-  return '5 pages';
+
+  // The landing page has to carry the promise, the two calls to action and the
+  // manager contact block (photo + WhatsApp + email) — those are the conversion
+  // paths a visitor uses.
+  const landing = (await anon.get('/')).text;
+  for (const needle of [
+    'Run Your Business Smarter With AI',
+    'AI-powered tools that help businesses automate operations',
+    'Start Free',
+    'Book a Demo',
+    'manager.jpg',
+  ]) {
+    assert(landing.includes(needle), `landing page is missing: ${needle}`);
+  }
+
+  // The floating WhatsApp widget and the manager card are on every public page.
+  const managerNumber = (process.env.NEXT_PUBLIC_SUPPORT_WHATSAPP ?? '0774075285').replace(/\D/g, '');
+  for (const page of ['/', '/privacy', '/terms']) {
+    const html = (await anon.get(page)).text;
+    assert(html.includes('wa.me'), `${page} has no WhatsApp contact link`);
+    assert(html.includes(managerNumber.slice(-7)), `${page} does not link the manager's WhatsApp number`);
+  }
+  const support = (await anon.get('/support/windhoek-beauty-studio')).text;
+  assert(support.includes('manager.jpg'), 'the public tenant support page has no manager photo');
+  return '5 pages, hero + CTAs + WhatsApp widget + manager card';
 });
 
 await check('dashboard pages render with a session', async () => {
-  const pages = [
-    '/dashboard',
-    '/dashboard/assistant',
-    '/dashboard/customers',
-    '/dashboard/sales',
-    '/dashboard/appointments',
-    '/dashboard/tasks',
-    '/dashboard/orders',
-    '/dashboard/inventory',
-    '/dashboard/support',
-    '/dashboard/knowledge',
-    '/dashboard/marketing',
-    '/dashboard/documents',
-    '/dashboard/reports',
-    '/dashboard/analytics',
-    '/dashboard/billing',
-    '/dashboard/team',
-    '/dashboard/settings',
-  ];
-  for (const page of pages) {
+  const pages = {
+    '/dashboard': 'Dashboard',
+    '/dashboard/assistant': 'Assistant',
+    '/dashboard/customers': 'Customers',
+    '/dashboard/sales': 'Sales',
+    '/dashboard/appointments': 'Appointments',
+    '/dashboard/tasks': 'Tasks',
+    '/dashboard/orders': 'Orders',
+    '/dashboard/inventory': 'Inventory',
+    '/dashboard/support': 'Support',
+    '/dashboard/knowledge': 'Knowledge',
+    '/dashboard/marketing': 'Marketing',
+    '/dashboard/documents': 'Documents',
+    '/dashboard/reports': 'Reports',
+    '/dashboard/analytics': 'Analytics',
+    '/dashboard/billing': 'Billing',
+    '/dashboard/team': 'Team',
+    '/dashboard/settings': 'Settings',
+  };
+  const entries = Object.entries(pages);
+  const first = (await owner.get('/dashboard')).text;
+  for (const [page, heading] of entries) {
     const res = await owner.get(page);
     eq(res.status, 200, `GET ${page}`);
+    assert(res.text.includes(heading), `${page} does not render its "${heading}" heading`);
   }
-  return `${pages.length} workspaces`;
+  // The sidebar is shared: a signed-in user can reach every workspace from the shell.
+  for (const [page] of entries) {
+    if (page === '/dashboard') continue;
+    assert(first.includes(`href="${page}"`) || first.includes(page), 'the sidebar omits ' + page);
+  }
+  return `${entries.length} workspaces with sidebar navigation`;
 });
 
 await check('logout ends the session', async () => {
@@ -1286,6 +1350,29 @@ try {
 } catch (error) {
   cleanupNote = `cleanup failed: ${error instanceof Error ? error.message : error}`;
 }
+
+// ---------------------------------------------------------------------------
+// Abuse protection runs last: this deliberately locks the login endpoint for the
+// whole IP (12 attempts / 5 minutes), so nothing may sign in after it.
+// ---------------------------------------------------------------------------
+await check('rate limiting protects the login endpoint', async () => {
+  let limited = null;
+  for (let attempt = 0; attempt < 20 && !limited; attempt += 1) {
+    const res = await anon.post('/api/auth/login', { email: `nobody-${attempt}@example.test`, password: 'Nope12345!' });
+    if (res.status === 429) limited = res;
+  }
+  assert(limited, 'never received 429');
+  eq(limited.json?.error?.code, 'rate_limited', 'rate limit error code');
+  // Note for the next run: this leaves the login endpoint throttled for this IP
+  // until the window expires; `signIn()` waits it out automatically.
+
+  const withValidCredentials = await anon.post('/api/auth/login', {
+    email: 'owner@test.local',
+    password: 'Str0ngPassw0rd!',
+  });
+  eq(withValidCredentials.status, 429, 'the limiter must protect valid credentials too');
+  return '429 after repeated failures; valid credentials are blocked too';
+});
 
 // ---------------------------------------------------------------------------
 // Report

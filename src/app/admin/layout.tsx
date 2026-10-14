@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getSessionContext } from '@/lib/auth/session';
-import { requireUser } from '@/lib/auth/rbac';
 import { APP_NAME } from '@/lib/domain';
 import { Badge } from '@/components/ui';
 
@@ -11,8 +10,14 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
+export const dynamic = 'force-dynamic';
+
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const session = requireUser(await getSessionContext());
+  // Same guard style as the dashboard: an anonymous visitor is redirected to the
+  // sign-in page with a return path instead of hitting an unhandled 401 (which
+  // would surface as a 500 on a server-rendered page).
+  const session = await getSessionContext();
+  if (!session) redirect('/login?next=/admin');
   if (session.user.platformRole !== 'PLATFORM_ADMIN') redirect('/dashboard');
 
   return (

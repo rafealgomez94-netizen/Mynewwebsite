@@ -156,9 +156,16 @@ SMOKE_BASE_URL=http://127.0.0.1:3100 npm run smoke
 npm run verify                         # typecheck + smoke
 ```
 
-Exit code is `1` when any check fails, which makes it usable in CI. The suite expects a
-development server: the dev-only `verification.devUrl` / `devUrl` fields are what let it
-follow the email-verification and password-reset links without an SMTP inbox.
+Two notes for repeated runs:
+
+- Exit code is `1` when any check fails, which makes it usable in CI.
+- The suite expects a development server: the dev-only `verification.devUrl` / `devUrl`
+  fields are what let it follow the email-verification and password-reset links without an
+  SMTP inbox.
+- The last check deliberately locks the login endpoint for your IP (12 attempts / 5 minutes)
+  to prove the limiter blocks valid credentials too. A run started inside that window waits
+  the remaining seconds out and continues; restarting the dev server clears the in-memory
+  buckets immediately.
 
 ### Manager photo
 
@@ -273,7 +280,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **76 / 76 checks pass** against the running app (last full run: signup →
+- `npm run smoke` — **77 / 77 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -293,13 +300,21 @@ Every mutating API route resolves the session, requires tenant membership, check
     inode and served stale data from some routes and fresh data from others. The database layer
     now detects that the file was replaced and reconnects, so a reset needs no restart
     (verified: a marker row created before the reset is gone from the API immediately after it).
+  - The admin layout called `requireUser` directly, so an anonymous visit to `/admin` threw
+    an unhandled 401 and rendered as a `500`. It now redirects to `/login?next=/admin`
+    (anonymous) or `/dashboard` (signed in, not a platform admin), matching the dashboard.
+  - Page checks assert content, not just status codes: the landing page must carry the hero
+    copy, both calls to action and the manager photo; every public page must link the manager's
+    WhatsApp number; each of the 17 dashboard workspaces must render its own heading and the
+    shared sidebar links them all.
 - Every marketing, auth, onboarding, dashboard and admin route returns `200` (or an intentional `307` redirect) against the seeded database.
 - Public endpoints verified: `GET /api/public/business?slug=`, `POST /api/support/public` (FAQ-grounded answer, low-confidence escalation creating a ticket), `POST /api/public/book` (booking created, confirmation logged), `GET /api/appointments?availability=true` (real slots from the business hours), `GET /api/documents/[id]/pdf` and `GET /api/reports/[id]/pdf` (valid PDF bytes).
 - AI assistant verified on real data: customer counts, low-stock list, promotion ideas and follow-up questions all cite verified numbers with labelled sections.
 - Marketing approval workflow verified: publishing a draft returns `409 approval_required`, approve → publish succeeds.
 - RBAC verified: Staff cannot invite users or change billing (`403`); unauthenticated dashboard access redirects to `/login`; unauthenticated API access returns `401`.
 - Tenant isolation verified with two live tenants.
-- Knowledge grounding verified end to end: a fresh `.txt` upload became searchable from both the public support chat and the dashboard assistant, quoting the exact price line for "how much is the bridal package", resolving inflections and abbreviations ("kerat" → keratin), answering multi-part questions from two different documents, and escalating with a support ticket when asked about a service the business does not offer.
+- Knowledge grounding verified end to end: a fresh `.txt` upload became searchable from both the public support chat and the dashboard assistant, resolving inflections and abbreviations ("kerat" → keratin), answering multi-part questions from two different documents, and escalating with a support ticket when asked about a service the business does not offer.
+- The demo workspace answers from its seeded documents again: "How much are box braids?" → N$350, "How much is a kids haircut?" → N$120, "Do you require a deposit for braiding?" → 30%, "What are your opening hours on Thursday?" → 09:00–19:00, "Can I pay by card?" → cash/card/EFT, while "Do you do laser hair removal?" and "How much is the bridal package?" correctly hand over to a human and raise a ticket.
 - Auth flows verified against the live API: forgot-password (no account-existence leak, single-use token, weak passwords rejected, sessions invalidated after reset), email verification (single use), team invitation (invited accounts cannot sign in until accepted; accept-invite sets the password, activates the membership and signs the invitee in).
 
 ---

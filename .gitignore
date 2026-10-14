@@ -1,0 +1,28 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+
+# Local database + uploaded knowledge base documents
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/storage/
+
+# Drag-and-drop uploads waiting for scripts/set-manager-photo.mjs
+uploads/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs & misc
+*.log
+npm-debug.log*
+.DS_Store
+next-env.d.ts
+.tsbuildinfo
+*.tsbuildinfo

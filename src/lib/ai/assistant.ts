@@ -1,0 +1,553 @@
+/**
+ * AI business assistant.
+ *
+ * Pipeline:  question → intent routing → verified fact subset + knowledge
+ * retrieval → narrative (LLM when configured, deterministic composer otherwise)
+ * → response tagged with grounding labels so facts, documents and
+ * recommendations are never blended together.
+ */
+import { callLlm, aiConfigured, aiModel, AI_SYSTEM_GUARDRAIL, type ChatMessage } from '@/lib/ai/provider';
+import { buildFactPack, renderFactPack, type BusinessFactPack } from '@/lib/ai/facts';
+import { calculatedStats, recommendations, type Insight } from '@/lib/ai/analytics';
+import { retrieveChunks, storeAiRun, buildKnowledgeSnapshot, listFaqs } from '@/lib/db/repositories/knowledge';
+import { findBusinessById, hoursFor, type BusinessRow } from '@/lib/db/repositories/accounts';
+import { GROUNDING_LABELS, type GroundingKind } from '@/lib/domain';
+import { formatMoney, formatNumber } from '@/lib/utils';
+
+export type AssistantIntent =
+  | 'CUSTOMER_COUNT'
+  | 'POPULAR_SERVICES'
+  | 'LOW_STOCK'
+  | 'PROMOTION_IDEA'
+  | 'FOLLOW_UPS'
+  | 'BEST_SELLERS'
+  | 'CUSTOMER_ISSUES'
+  | 'WEEKLY_REPORT'
+  | 'MARKETING_CAMPAIGN'
+  | 'FOLLOW_UP_MESSAGE'
+  | 'REVENUE'
+  | 'APPOINTMENTS'
+  | 'TASKS'
+  | 'BUSINESS_PROFILE'
+  | 'GENERAL';
+
+const INTENT_RULES: { intent: AssistantIntent; patterns: RegExp }[] = [
+  { intent: 'CUSTOMER_COUNT', patterns: /\b(how many (new )?customers|new customers|customer (growth|count)|this week'?s customers)\b/i },
+  { intent: 'POPULAR_SERVICES', patterns: /\b(most popular service|popular services|top service|best service|which service)\b/i },
+  { intent: 'LOW_STOCK', patterns: /\b(low (in )?stock|running low|replenish|reorder|out of stock|stock level)\b/i },
+  { intent: 'PROMOTION_IDEA', patterns: /\b(what should (we|i) promote|promote this week|promotion idea|what should we market|deal idea)\b/i },
+  { intent: 'FOLLOW_UPS', patterns: /\b(follow[- ]?up|who should (we|i) contact|reach out|customers need attention)\b/i },
+  { intent: 'BEST_SELLERS', patterns: /\b(best[- ]?sell|top sell|most sold|best selling)\b/i },
+  { intent: 'CUSTOMER_ISSUES', patterns: /\b(problems are customers|complaints|customer issues|what are customers reporting|common questions)\b/i },
+  { intent: 'WEEKLY_REPORT', patterns: /\b(weekly report|week report|business report|summary of (the )?week|report for (the )?week)\b/i },
+  { intent: 'MARKETING_CAMPAIGN', patterns: /\b(marketing campaign|campaign plan|advert|campaign idea)\b/i },
+  { intent: 'FOLLOW_UP_MESSAGE', patterns: /\b(follow[- ]?up message|message to (a )?customer|write (a )?(whatsapp|sms|email) (to|message)|reminder message)\b/i },
+  { intent: 'REVENUE', patterns: /\b(revenue|sales (this|last)|how much did we (make|earn)|income|turnover)\b/i },
+  { intent: 'APPOINTMENTS', patterns: /\b(appointment|booking|schedule|calendar)\b/i },
+  { intent: 'TASKS', patterns: /\b(task|to[- ]?do|overdue work|what should (we|i) do today)\b/i },
+  { intent: 'BUSINESS_PROFILE', patterns: /\b(opening hours|open today|price list|our prices|where are we|address|contact details|policies)\b/i },
+];
+
+export function detectIntent(question: string): AssistantIntent {
+  for (const rule of INTENT_RULES) {
+    if (rule.patterns.test(question)) return rule.intent;
+  }
+  return 'GENERAL';
+}
+
+export type AssistantSource = { title: string; snippet: string; kind: string; score: number };
+
+export type AssistantAnswer = {
+  intent: AssistantIntent;
+  answer: string;
+  sections: { kind: GroundingKind; label: string; items: string[] }[];
+  recommendations: Insight[];
+  sources: AssistantSource[];
+  provider: 'openai-compatible' | 'builtin-analytics';
+  model: string | null;
+  grounded: boolean;
+  latencyMs: number;
+  tokens: { in: number; out: number };
+  suggestions: string[];
+};
+
+function intentFacts(intent: AssistantIntent, facts: BusinessFactPack): string[] {
+  const base: string[] = [];
+  switch (intent) {
+    case 'CUSTOMER_COUNT':
+      base.push(
+        `Customers total: ${facts.customers.total}`,
+        `New customers last 7 days: ${facts.customers.newThisWeek}`,
+        `New customers last 30 days: ${facts.customers.newThisMonth}`,
+        `Status mix: ${facts.customers.byStatus.map((row) => `${row.status}=${row.c}`).join(', ') || 'no customers recorded yet'}`,
+      );
+      break;
+    case 'POPULAR_SERVICES':
+      base.push(
+        facts.sales.popularServices.length
+          ? `Bookings by service: ${facts.sales.popularServices
+              .map((service) => `${service.name} = ${service.bookings} bookings at ${formatMoney(service.priceCents)}`)
+              .join('; ')}`
+          : 'No service bookings recorded yet.',
+      );
+      break;
+    case 'LOW_STOCK':
+      base.push(
+        facts.inventory.lowStock.length
+          ? `Products at or below minimum: ${facts.inventory.lowStock
+              .map((product) => `${product.name} (${product.quantity} left, min ${product.minStock})`)
+              .join('; ')}`
+          : 'No products are at or below their minimum stock level.',
+        `Total products at/below minimum: ${facts.inventory.lowStockCount}`,
+        `Fast movers: ${facts.inventory.fastMoving.map((product) => `${product.name} (${product.unitsSold} sold)`).join('; ') || 'none recorded'}`,
+      );
+      break;
+    case 'BEST_SELLERS':
+      base.push(
+        facts.sales.topItems.length
+          ? `Best sellers last 30 days: ${facts.sales.topItems
+              .map((item) => `${item.name} — ${item.units} units, ${formatMoney(item.revenueCents)}`)
+              .join('; ')}`
+          : 'No orders recorded in the last 30 days.',
+        `Fast moving stock: ${facts.inventory.fastMoving.map((product) => `${product.name} (${product.unitsSold} units)`).join('; ') || 'none'}`,
+      );
+      break;
+    case 'FOLLOW_UPS':
+      base.push(
+        facts.customers.followUp.length
+          ? `Customers with no interaction for 30+ days: ${facts.customers.followUp
+              .map((customer) => `${customer.name} (${customer.status}, ${customer.phone ?? customer.email ?? 'no contact detail'})`)
+              .join('; ')}`
+          : 'No customers are overdue for follow-up.',
+        facts.leads.staleFollowUps.length
+          ? `Stale leads: ${facts.leads.staleFollowUps.map((lead) => `${lead.name} (${lead.stage})`).join('; ')}`
+          : 'No stale leads.',
+      );
+      break;
+    case 'CUSTOMER_ISSUES':
+      base.push(
+        facts.support.frequentTopics.length
+          ? `Recurring customer questions: ${facts.support.frequentTopics.map((topic) => `${topic.topic} (${topic.count})`).join('; ')}`
+          : 'No customer issues recorded yet.',
+        `Open conversations: ${facts.support.openConversations}; open tickets: ${facts.support.openTickets}.`,
+      );
+      break;
+    case 'REVENUE':
+      base.push(
+        `Revenue last 7 days: ${formatMoney(facts.revenue.weekCents)} from ${facts.revenue.weekOrders} orders`,
+        `Revenue previous 7 days change: ${facts.revenue.weekChangePct.toFixed(1)}%`,
+        `Revenue last 30 days: ${formatMoney(facts.revenue.monthCents)} from ${facts.revenue.monthOrders} orders, average order ${formatMoney(facts.revenue.monthAverageCents)}`,
+        `Sales channels (30d): ${facts.sales.channels.map((channel) => `${channel.channel}=${formatMoney(channel.revenueCents)}`).join('; ') || 'no channel data'}`,
+      );
+      break;
+    case 'APPOINTMENTS':
+      base.push(
+        `Appointments last 7 days: ${facts.appointments.last7Days} (${facts.appointments.completedLast7Days} completed, ${facts.appointments.cancelledLast7Days} cancelled or no-show)`,
+        `Appointments next 7 days: ${facts.appointments.next7Days}`,
+        facts.appointments.upcoming.length
+          ? `Next appointments: ${facts.appointments.upcoming
+              .map((appointment) => `${appointment.title} at ${appointment.startAt}${appointment.staff ? ` with ${appointment.staff}` : ''}`)
+              .join('; ')}`
+          : 'No upcoming appointments scheduled.',
+      );
+      break;
+    case 'TASKS':
+      base.push(
+        `Task counts: ${facts.tasks.byStatus.map((row) => `${row.status}=${row.c}`).join(', ') || 'no tasks'}`,
+        `Overdue tasks: ${facts.tasks.overdue}`,
+      );
+      break;
+    case 'WEEKLY_REPORT':
+    case 'PROMOTION_IDEA':
+    case 'MARKETING_CAMPAIGN':
+    case 'FOLLOW_UP_MESSAGE':
+    case 'GENERAL':
+    default:
+      base.push(...renderFactPack(facts).split('\n'));
+      break;
+  }
+  return base;
+}
+
+function deterministicAnswer(
+  intent: AssistantIntent,
+  facts: BusinessFactPack,
+  businessName: string,
+  question: string,
+): { answer: string; suggestions: string[] } {
+  const L: string[] = [];
+  const tag = (kind: keyof typeof GROUNDING_LABELS, text: string) => `[${GROUNDING_LABELS[kind]}] ${text}`;
+
+  switch (intent) {
+    case 'CUSTOMER_COUNT':
+      L.push(
+        tag('VERIFIED_DATA', `You have ${formatNumber(facts.customers.total)} customers on file, with ${formatNumber(
+          facts.customers.newThisWeek,
+        )} added in the last 7 days and ${formatNumber(facts.customers.newThisMonth)} in the last 30 days.`),
+      );
+      if (facts.customers.byStatus.length) {
+        L.push(
+          tag(
+            'VERIFIED_DATA',
+            `Status mix: ${facts.customers.byStatus.map((row) => `${row.status} ${row.c}`).join(', ')}.`,
+          ),
+        );
+      }
+      L.push(
+        tag(
+          'AI_RECOMMENDATION',
+          facts.customers.followUp.length
+            ? `Reach out to the ${facts.customers.followUp.length} customers who have not interacted in 30+ days — start with ${facts.customers.followUp[0].name}.`
+            : 'Growth looks steady; keep capture details (name + phone) at every touchpoint to keep the list compounding.',
+        ),
+      );
+      break;
+    case 'POPULAR_SERVICES':
+      L.push(
+        facts.sales.popularServices.length
+          ? tag(
+              'VERIFIED_DATA',
+              `Most booked services: ${facts.sales.popularServices
+                .map((service) => `${service.name} (${service.bookings} bookings, ${formatMoney(service.priceCents)})`)
+                .join(', ')}.`,
+            )
+          : `[${GROUNDING_LABELS.INSUFFICIENT}] No service bookings have been recorded yet, so I cannot rank your services. Record bookings (or connect your calendar) and ask me again.`,
+      );
+      break;
+    case 'LOW_STOCK':
+      L.push(
+        facts.inventory.lowStock.length
+          ? tag(
+              'VERIFIED_DATA',
+              `${facts.inventory.lowStockCount} product(s) are at or below the minimum level: ${facts.inventory.lowStock
+                .map((product) => `${product.name} — ${product.quantity} left (min ${product.minStock})${product.supplier ? `, supplier ${product.supplier}` : ''}`)
+                .join('; ')}.`,
+            )
+          : tag('VERIFIED_DATA', 'No products are currently at or below their minimum stock level.'),
+      );
+      if (facts.inventory.fastMoving.length) {
+        L.push(
+          tag(
+            'VERIFIED_DATA',
+            `Fastest moving stock: ${facts.inventory.fastMoving
+              .map((product) => `${product.name} (${product.unitsSold} units sold, ${product.quantity} in stock)`)
+              .join(', ')}.`,
+          ),
+        );
+      }
+      L.push(
+        tag('AI_RECOMMENDATION', 'Reorder low-stock items before your next busy period and consider a minimum-level review for your fastest movers.'),
+      );
+      break;
+    case 'BEST_SELLERS':
+      L.push(
+        facts.sales.topItems.length
+          ? tag(
+              'VERIFIED_DATA',
+              `Best-selling items in the last 30 days: ${facts.sales.topItems
+                .map((item) => `${item.name} (${item.units} units, ${formatMoney(item.revenueCents)})`)
+                .join('; ')}.`,
+            )
+          : `[${GROUNDING_LABELS.INSUFFICIENT}] There are no orders recorded in the last 30 days, so I cannot determine best sellers yet.`,
+      );
+      break;
+    case 'FOLLOW_UPS':
+      L.push(
+        facts.customers.followUp.length
+          ? tag(
+              'VERIFIED_DATA',
+              `${facts.customers.followUp.length} customer(s) have not interacted in over 30 days: ${facts.customers.followUp
+                .map((customer) => `${customer.name} (${customer.status})`)
+                .join(', ')}.`,
+            )
+          : tag('VERIFIED_DATA', 'No customers are currently overdue for follow-up.'),
+      );
+      if (facts.leads.staleFollowUps.length) {
+        L.push(
+          tag(
+            'VERIFIED_DATA',
+            `Leads waiting the longest: ${facts.leads.staleFollowUps.map((lead) => `${lead.name} (${lead.stage})`).join(', ')}.`,
+          ),
+        );
+      }
+      break;
+    case 'CUSTOMER_ISSUES':
+      L.push(
+        facts.support.frequentTopics.length
+          ? tag(
+              'VERIFIED_DATA',
+              `Recurring customer questions in the last 90 days: ${facts.support.frequentTopics
+                .map((topic) => `“${topic.topic}” ×${topic.count}`)
+                .join('; ')}.`,
+            )
+          : tag('VERIFIED_DATA', 'No customer issues or escalations have been recorded yet.'),
+      );
+      L.push(
+        tag('AI_RECOMMENDATION', 'Add the top recurring question to your FAQ and the AI support assistant will answer it automatically.'),
+      );
+      break;
+    case 'WEEKLY_REPORT':
+      L.push(
+        tag('VERIFIED_DATA', `Weekly report for ${businessName} (calculated from your stored data):`),
+        tag('VERIFIED_DATA', `• Revenue: ${formatMoney(facts.revenue.weekCents)} from ${facts.revenue.weekOrders} orders (${facts.revenue.weekChangePct >= 0 ? '+' : ''}${facts.revenue.weekChangePct.toFixed(1)}% week over week).`),
+        tag('VERIFIED_DATA', `• Customers: ${facts.customers.newThisWeek} new, ${facts.customers.total} total.`),
+        tag('VERIFIED_DATA', `• Appointments: ${facts.appointments.last7Days} in the past week, ${facts.appointments.next7Days} booked for the next 7 days.`),
+        tag('VERIFIED_DATA', `• Leads: ${facts.leads.open} open, win rate ${facts.leads.conversionRatePct.toFixed(1)}%.`),
+        tag('VERIFIED_DATA', `• Inventory: ${facts.inventory.lowStockCount} product(s) at or below minimum.`),
+        tag('VERIFIED_DATA', `• Customers/issues: ${facts.support.openConversations} open conversations, ${facts.support.openTickets} open tickets.`),
+        tag('AI_RECOMMENDATION', 'Focus areas for next week: clear overdue tasks, reorder low stock, and follow up the customers who have gone quiet.'),
+      );
+      break;
+    case 'PROMOTION_IDEA': {
+      const best = facts.sales.topItems[0] ?? facts.sales.popularServices[0];
+      const slow = facts.inventory.slowMoving[0];
+      L.push(
+        best
+          ? tag(
+              'VERIFIED_DATA',
+              `Your strongest performer is ${best.name}${'units' in best ? ` (${best.units} units sold recently)` : ''}.`,
+            )
+          : tag('VERIFIED_DATA', 'No sales history is available yet to base a promotion on.'),
+      );
+      L.push(
+        tag(
+          'AI_RECOMMENDATION',
+          best
+            ? `Run a bundle: ${best.name}${slow ? ` together with ${slow.name}, which has been slower (${slow.unitsSold} sold)` : ''}. Promote it on WhatsApp to returning customers between 4–6pm and publish a social post with the same offer.`
+            : 'Start by recording a few sales, then I can suggest what to promote based on what actually sells.',
+        ),
+      );
+      break;
+    }
+    case 'MARKETING_CAMPAIGN': {
+      L.push(
+        tag('VERIFIED_DATA', `Audience available: ${formatNumber(facts.customers.total)} customers, ${facts.customers.byStatus.find((row) => row.status === 'VIP')?.c ?? 0} VIP.`),
+        tag(
+          'AI_RECOMMENDATION',
+          'Campaign outline — Goal: repeat visits this month. Audience: returning + VIP customers. Channels: WhatsApp broadcast, Instagram post, SMS to inactive customers. Offer: limited-time bundle on your best seller. Sequence: day 1 announcement, day 3 reminder to non-openers, day 7 last chance.',
+        ),
+      );
+      break;
+    }
+    case 'FOLLOW_UP_MESSAGE':
+      L.push(
+        facts.customers.followUp[0]
+          ? tag('VERIFIED_DATA', `Suggested recipient: ${facts.customers.followUp[0].name} (${facts.customers.followUp[0].status}).`)
+          : tag('VERIFIED_DATA', 'No specific customer is overdue — I drafted a generic follow-up you can personalise.'),
+        tag(
+          'AI_RECOMMENDATION',
+          `Draft: “Hi ${
+            facts.customers.followUp[0]?.name.split(' ')[0] ?? 'there'
+          }, it's ${businessName}. We haven't seen you in a while and we've kept something aside for you — ${
+            facts.sales.topItems[0]?.name ?? 'our most popular service'
+          }. Would you like me to book you in this week? Reply YES and I'll sort it out.”`,
+        ),
+      );
+      break;
+    case 'REVENUE':
+      L.push(
+        tag('VERIFIED_DATA', `Last 7 days: ${formatMoney(facts.revenue.weekCents)} from ${facts.revenue.weekOrders} orders (${facts.revenue.weekChangePct >= 0 ? '+' : ''}${facts.revenue.weekChangePct.toFixed(1)}% vs the previous week).`),
+        tag('VERIFIED_DATA', `Last 30 days: ${formatMoney(facts.revenue.monthCents)} from ${facts.revenue.monthOrders} orders, average order value ${formatMoney(facts.revenue.monthAverageCents)}.`),
+      );
+      if (facts.sales.channels.length) {
+        L.push(
+          tag('VERIFIED_DATA', `Channels (30d): ${facts.sales.channels.map((channel) => `${channel.channel} ${formatMoney(channel.revenueCents)}`).join(', ')}.`),
+        );
+      }
+      L.push(tag('AI_RECOMMENDATION', facts.revenue.weekChangePct < 0 ? 'Revenue softened — a re-engagement campaign to returning customers is the fastest lever.' : 'Revenue is trending up; protect the momentum with a loyalty offer for repeat buyers.'));
+      break;
+    case 'APPOINTMENTS':
+      L.push(
+        tag('VERIFIED_DATA', `You had ${facts.appointments.last7Days} appointment(s) in the last 7 days (${facts.appointments.completedLast7Days} completed) and ${facts.appointments.next7Days} booked for the next 7 days.`),
+      );
+      if (facts.appointments.upcoming.length) {
+        L.push(
+          tag('VERIFIED_DATA', `Next: ${facts.appointments.upcoming.slice(0, 5).map((appointment) => `${appointment.title} — ${appointment.startAt.slice(0, 16).replace('T', ' ')} UTC`).join('; ')}.`),
+        );
+      }
+      break;
+    case 'TASKS':
+      L.push(
+        tag('VERIFIED_DATA', `Tasks: ${facts.tasks.byStatus.map((row) => `${row.status} ${row.c}`).join(', ') || 'none yet'}. Overdue: ${facts.tasks.overdue}.`),
+      );
+      L.push(tag('AI_RECOMMENDATION', 'Start with overdue items that involve a customer promise, then schedule the rest for the quietest part of your week.'));
+      break;
+    case 'BUSINESS_PROFILE':
+      L.push(
+        `[${GROUNDING_LABELS.INSUFFICIENT}] I don't have a confident answer for “${question}” from your stored data. This usually means the detail (price, policy or opening hours) has not been added or uploaded yet. Add it in Business settings or upload the document, and I will answer from then on.`,
+      );
+      break;
+    case 'GENERAL':
+    default:
+      L.push(
+        tag('VERIFIED_DATA', `Snapshot for ${businessName}: ${formatNumber(facts.customers.total)} customers, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.appointments.next7Days} upcoming appointments, ${facts.inventory.lowStockCount} product(s) low on stock.`),
+      );
+      L.push(
+        tag('AI_RECOMMENDATION', 'Ask me for a weekly report, your best sellers, low stock items, who to follow up, or a marketing campaign and I will work from your own data.'),
+      );
+      break;
+  }
+  return {
+    answer: L.join('\n\n'),
+    suggestions: suggestionsFor(intent),
+  };
+}
+
+function suggestionsFor(intent: AssistantIntent): string[] {
+  const common = [
+    'How many customers did we get this week?',
+    'What are our most popular services?',
+    'Which products are low in stock?',
+    'What should we promote this week?',
+  ];
+  switch (intent) {
+    case 'LOW_STOCK':
+      return ['Which products are selling fastest?', 'Create a purchase follow-up task', 'What were our best-selling products?'];
+    case 'WEEKLY_REPORT':
+      return ['Create a marketing campaign', 'Which customers need follow-up?', 'What problems are customers reporting?'];
+    default:
+      return common;
+  }
+}
+
+export async function askAssistant(input: {
+  businessId: string;
+  userId?: string | null;
+  question: string;
+  surface?: 'ASSISTANT' | 'SALES' | 'MARKETING' | 'ANALYTICS' | 'DOCUMENTS';
+  history?: ChatMessage[];
+}): Promise<AssistantAnswer> {
+  const started = Date.now();
+  const business = findBusinessById(input.businessId);
+  if (!business) throw new Error('Business not found');
+  const facts = buildFactPack(input.businessId);
+  const intent = detectIntent(input.question);
+  const retrieved = retrieveChunks(input.businessId, input.question, 5);
+  const knowledgeSnapshot = retrieved.length ? '' : buildKnowledgeSnapshot(input.businessId, 3000);
+  const relatedRecommendations = recommendations(facts).slice(0, 4);
+
+  const sections: AssistantAnswer['sections'] = [
+    {
+      kind: 'VERIFIED_DATA',
+      label: GROUNDING_LABELS.VERIFIED_DATA,
+      items: calculatedStats(facts)
+        .slice(0, 6)
+        .map((stat) => `${stat.label}: ${stat.value}${stat.changePct !== undefined ? ` (${stat.changePct >= 0 ? '+' : ''}${stat.changePct.toFixed(1)}%)` : ''}`),
+    },
+  ];
+
+  if (retrieved.length) {
+    sections.push({
+      kind: 'BUSINESS_DOCUMENT',
+      label: GROUNDING_LABELS.BUSINESS_DOCUMENT,
+      items: retrieved.map((chunk) => `${chunk.sourceTitle}${chunk.heading ? ` › ${chunk.heading}` : ''}`),
+    });
+  }
+
+  sections.push({
+    kind: 'AI_RECOMMENDATION',
+    label: GROUNDING_LABELS.AI_RECOMMENDATION,
+    items: relatedRecommendations.map((insight) => insight.title),
+  });
+
+  let answerText: string;
+  let provider: AssistantAnswer['provider'] = 'builtin-analytics';
+  let model: string | null = null;
+  let tokensIn = 0;
+  let tokensOut = 0;
+  const fallback = deterministicAnswer(intent, facts, business.name, input.question);
+
+  if (aiConfigured()) {
+    try {
+      const messages: ChatMessage[] = [
+        { role: 'system', content: AI_SYSTEM_GUARDRAIL },
+        {
+          role: 'system',
+          content: [
+            `BUSINESS PROFILE\n${business.name} (${business.type}) — currency ${business.currency}`,
+            `DETECTED INTENT: ${intent}`,
+            renderFactPack(facts),
+            retrieved.length
+              ? `UPLOADED BUSINESS DOCUMENTS (retrieved excerpts)\n${retrieved
+                  .map((chunk) => `- ${chunk.sourceTitle}${chunk.heading ? ` › ${chunk.heading}` : ''}: ${chunk.content.slice(0, 700)}`)
+                  .join('\n')}`
+              : knowledgeSnapshot
+                ? `UPLOADED BUSINESS DOCUMENTS\n${knowledgeSnapshot.slice(0, 2500)}`
+                : 'No uploaded business documents are available.',
+            `OPENING HOURS: ${JSON.stringify(hoursFor(business))}`,
+            `FAQ COUNT: ${listFaqs(business.id, true).length}`,
+          ].join('\n\n'),
+        },
+        ...(input.history ?? []).slice(-6),
+        { role: 'user', content: input.question },
+      ];
+      const result = await callLlm(messages, { temperature: 0.3 });
+      if (result.text) {
+        answerText = result.text;
+        provider = 'openai-compatible';
+        model = result.model;
+        tokensIn = result.tokensIn;
+        tokensOut = result.tokensOut;
+      } else {
+        answerText = fallback.answer;
+      }
+    } catch (error) {
+      console.warn('[ai] falling back to built-in analytics:', error instanceof Error ? error.message : error);
+      answerText = `${fallback.answer}\n\n[${GROUNDING_LABELS.AI_RECOMMENDATION}] The AI provider was unavailable, so this answer was produced by the built-in analytics engine using your verified data only.`;
+    }
+  } else {
+    answerText = `${fallback.answer}\n\n[${GROUNDING_LABELS.AI_RECOMMENDATION}] Generated by the built-in analytics engine from your verified business data. Add an AI_API_KEY to enable long-form generative answers.`;
+  }
+
+  const latencyMs = Date.now() - started;
+  storeAiRun({
+    businessId: input.businessId,
+    userId: input.userId ?? null,
+    surface: input.surface ?? 'ASSISTANT',
+    prompt: input.question,
+    response: answerText.slice(0, 8000),
+    provider,
+    model,
+    sources: retrieved.map((chunk) => ({ title: chunk.sourceTitle, score: chunk.score })),
+    grounded: true,
+    tokensIn,
+    tokensOut,
+    latencyMs,
+  });
+
+  return {
+    intent,
+    answer: answerText,
+    sections,
+    recommendations: relatedRecommendations,
+    sources: retrieved.map((chunk) => ({
+      title: chunk.sourceTitle,
+      snippet: chunk.content.slice(0, 240),
+      kind: chunk.kind,
+      score: chunk.score,
+    })),
+    provider,
+    model,
+    grounded: true,
+    latencyMs,
+    tokens: { in: tokensIn, out: tokensOut },
+    suggestions: fallback.suggestions,
+  };
+}
+
+export const ASSISTANT_EXAMPLES = [
+  'How many customers did we get this week?',
+  'What are our most popular services?',
+  'Which products are low in stock?',
+  'What should we promote this week?',
+  'Which customers need follow-up?',
+  'What were our best-selling products?',
+  'What problems are customers reporting?',
+  'Create a weekly business report.',
+  'Create a marketing campaign.',
+  'Create a customer follow-up message.',
+];
+
+export function assistantProviderName(): string {
+  return aiConfigured() ? `AI provider (${aiModel()})` : 'Built-in analytics engine';
+}

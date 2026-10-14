@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { handleError, ok, parseBody } from '@/lib/api/http';
+import { handleError, ok } from '@/lib/api/http';
 import { conversationMessageSchema } from '@/lib/validation';
 import { getSessionContext } from '@/lib/auth/session';
 import { assertPermission, HttpError, requireTenant } from '@/lib/auth/rbac';
@@ -25,9 +25,10 @@ export async function GET(_request: Request, { params }: Params) {
 }
 
 /**
- * Staff reply. `mode: 'info'` asks the AI to draft a grounded answer first
- * (shown as an AI message, clearly labelled), `mode: 'reply'` sends the text as
- * a staff message.
+ * Staff reply. `mode: 'ai_draft'` asks the AI to draft a grounded answer first
+ * (returned to the agent for review, never sent automatically), `mode: 'reply'`
+ * stores the text as a staff message. The body is read exactly once — a Request
+ * stream cannot be consumed twice.
  */
 export async function POST(request: Request, { params }: Params) {
   try {
@@ -37,7 +38,12 @@ export async function POST(request: Request, { params }: Params) {
     const conversation = findConversation(ctx.business.id, id);
     if (!conversation) throw new HttpError(404, 'Conversation not found.', 'not_found');
 
-    const body = await request.json();
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      throw new HttpError(400, 'Request body must be valid JSON.', 'bad_request');
+    }
     const mode = z.enum(['reply', 'ai_draft']).parse(body.mode ?? 'reply');
 
     if (mode === 'ai_draft') {
@@ -58,7 +64,7 @@ export async function POST(request: Request, { params }: Params) {
       return ok({ draft });
     }
 
-    const input = await parseBody(request, conversationMessageSchema);
+    const input = conversationMessageSchema.parse(body);
     addMessage(ctx.business.id, {
       conversationId: id,
       sender: 'STAFF',

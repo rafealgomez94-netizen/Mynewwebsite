@@ -73,7 +73,7 @@ export function updateService(businessId: string, id: string, patch: Record<stri
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
   for (const [key, column] of Object.entries(map)) {
-    if (key in patch) {
+    if (key in patch && patch[key] !== undefined) {
       const value = patch[key];
       sets.push(`${column} = ?`);
       params.push(typeof value === 'boolean' ? (value ? 1 : 0) : ((value as string | number | null) ?? null));
@@ -249,7 +249,7 @@ export function updateProduct(businessId: string, id: string, patch: Record<stri
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
   for (const [key, column] of Object.entries(map)) {
-    if (key in patch) {
+    if (key in patch && patch[key] !== undefined) {
       const value = patch[key];
       sets.push(`${column} = ?`);
       params.push(typeof value === 'boolean' ? (value ? 1 : 0) : ((value as string | number | null) ?? null));

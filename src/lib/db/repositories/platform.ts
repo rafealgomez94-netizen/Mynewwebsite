@@ -279,7 +279,7 @@ export function updateSubscription(businessId: string, patch: Record<string, unk
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
   for (const [key, column] of Object.entries(map)) {
-    if (key in patch) {
+    if (key in patch && patch[key] !== undefined) {
       const value = patch[key];
       sets.push(`${column} = ?`);
       params.push(typeof value === 'boolean' ? (value ? 1 : 0) : ((value as string | number | null) ?? null));

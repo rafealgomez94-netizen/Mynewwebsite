@@ -139,6 +139,26 @@ npm run typecheck         # tsc --noEmit
 npm run build && npm start
 ```
 
+### End-to-end smoke suite
+
+`npm run smoke` drives the running app over HTTP exactly like a real client: it signs a new
+tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
+CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
+knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
+billing, invitations, RBAC and tenant isolation — **75 checks in total**. It creates its own
+tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
+safe to run against a development database.
+
+```bash
+npm run smoke                          # defaults to http://127.0.0.1:3000
+SMOKE_BASE_URL=http://127.0.0.1:3100 npm run smoke
+npm run verify                         # typecheck + smoke
+```
+
+Exit code is `1` when any check fails, which makes it usable in CI. The suite expects a
+development server: the dev-only `verification.devUrl` / `devUrl` fields are what let it
+follow the email-verification and password-reset links without an SMTP inbox.
+
 ### Manager photo
 
 The manager contact card (landing page, legal pages and tenant support/booking pages) reads `public/manager.jpg`.
@@ -249,6 +269,17 @@ Every mutating API route resolves the session, requires tenant membership, check
 ## 10. Verification performed
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
+- `npm run smoke` — **75 / 75 checks pass** against the running app (last full run: signup →
+  verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
+  appointments → public booking → tasks → conversations → support → knowledge → AI assistant
+  → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
+  isolation → page rendering). Bugs the suite caught and that are now fixed:
+  - `POST /api/conversations/[id]/messages` consumed the request body twice, so every staff
+    reply returned `400 Request body must be valid JSON` — the body is now read once.
+  - The generic update helpers (`updateService`, `updateProduct`, `updateLead`, `updateUser`,
+    `updateSubscription`) treated an explicitly passed `undefined` as "set to NULL", so a
+    partial `PATCH` (e.g. changing only a price) failed with a `NOT NULL` conflict — undefined
+    fields are now skipped.
 - Every marketing, auth, onboarding, dashboard and admin route returns `200` (or an intentional `307` redirect) against the seeded database.
 - Public endpoints verified: `GET /api/public/business?slug=`, `POST /api/support/public` (FAQ-grounded answer, low-confidence escalation creating a ticket), `POST /api/public/book` (booking created, confirmation logged), `GET /api/appointments?availability=true` (real slots from the business hours), `GET /api/documents/[id]/pdf` and `GET /api/reports/[id]/pdf` (valid PDF bytes).
 - AI assistant verified on real data: customer counts, low-stock list, promotion ideas and follow-up questions all cite verified numbers with labelled sections.

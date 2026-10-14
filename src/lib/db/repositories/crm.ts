@@ -408,10 +408,13 @@ export function updateLead(
   };
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
+  const values = patch as Record<string, string | number | null | undefined>;
   for (const [key, column] of Object.entries(map)) {
-    if (key in patch) {
+    // Only fields that were actually supplied are written: `undefined` must
+    // never null out an existing column.
+    if (key in patch && values[key] !== undefined) {
       sets.push(`${column} = ?`);
-      params.push((patch as Record<string, string | number | null>)[key] ?? null);
+      params.push(values[key] ?? null);
     }
   }
   if (!sets.length) return findLead(businessId, id);

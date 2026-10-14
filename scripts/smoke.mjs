@@ -812,6 +812,47 @@ await check('assistant cites uploaded documents and refuses to guess', async () 
   return 'documents cited; unknowns flagged';
 });
 
+await check('chunk keyword format stays compatible with retrieval', async () => {
+  // Chunks written by the app store a space-separated token bag; rows written by
+  // other tooling (the demo seeder, hand edits) used to store a JSON array, which
+  // made them invisible to BM25 and caused real questions to escalate. Both shapes
+  // must stay retrievable, and the inspector must stay tenant-scoped.
+  const db = new DatabaseSync(dbFilePath());
+  const newest = db
+    .prepare('SELECT id, source_id, keywords FROM knowledge_chunks WHERE business_id = ? ORDER BY created_at DESC LIMIT 1')
+    .get(businessId);
+  assert(newest, 'no chunk indexed for the smoke tenant');
+  assert(!String(newest.keywords ?? '').trim().startsWith('['), 'the app must write a space-separated token bag');
+
+  db.prepare(
+    `INSERT INTO knowledge_chunks (id, business_id, source_id, heading, content, keywords, position, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    `kbc_legacy_${STAMP}`,
+    businessId,
+    newest.source_id,
+    null,
+    'Zephyrbloom signature treatment costs N$987 and takes 45 minutes.',
+    JSON.stringify(['zephyrbloom', 'signature', 'treatment', 'costs', 'minutes']),
+    -1,
+    new Date().toISOString(),
+  );
+  db.close();
+
+  const res = await owner.get(`/api/dev/grounding?q=${encodeURIComponent('How much is the Zephyrbloom treatment?')}`);
+  if (res.status === 404) return 'skipped — the grounding inspector is development only';
+  eq(res.status, 200, 'grounding inspector');
+  assert((res.json.data.chunks ?? []).length > 0, 'a JSON-keyword chunk was not retrievable');
+  assert(res.json.data.chunks[0].content.includes('Zephyrbloom'), 'the wrong chunk ranked first');
+
+  const other = await owner.get('/api/dev/grounding?businessId=biz_not_mine&q=anything');
+  eq(other.status, 403, 'cross-workspace inspection');
+  const unauthenticated = await anon.get('/api/dev/grounding?q=opening+hours');
+  eq(unauthenticated.status, 401, 'anonymous inspection');
+
+  return 'token bag + legacy JSON rows both retrieve; access is tenant-scoped';
+});
+
 await check('assistant generates a follow-up message and a weekly report', async () => {
   const followUp = await owner.post('/api/ai/assistant', { message: 'Create a customer follow-up message for a VIP who has not visited in a month.' });
   eq(followUp.status, 200, 'follow-up message');
@@ -1178,10 +1219,14 @@ await check('logout ends the session', async () => {
 // ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
-async function cleanup() {
-  const file = process.env.DATABASE_FILE
+function dbFilePath() {
+  return process.env.DATABASE_FILE
     ? path.resolve(process.cwd(), process.env.DATABASE_FILE)
     : path.join(process.cwd(), 'data', 'workspace-digital.db');
+}
+
+async function cleanup() {
+  const file = dbFilePath();
   if (!fs.existsSync(file)) return 'database file not found — skipped';
 
   const db = new DatabaseSync(file);

@@ -79,6 +79,28 @@ function sameTerm(a: string, b: string): boolean {
   return stem(a) === stem(b);
 }
 
+/**
+ * Chunk keywords are written as a space-separated token bag (see `createSource`).
+ * Rows created by other tooling may hold a JSON array instead, so accept both:
+ * retrieval must not depend on the storage format of an optimisation column.
+ */
+export function parseKeywordTokens(raw: string | null): string[] {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) return parsed.map((value) => String(value).toLowerCase()).filter(Boolean);
+    } catch {
+      /* not JSON after all — fall through to the plain split */
+    }
+  }
+  return trimmed
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+}
+
 export function tokenise(text: string): string[] {
   return text
     .toLowerCase()
@@ -476,10 +498,17 @@ export function retrieveChunks(businessId: string, query: string, limit = 5): Re
   const docCount = rows.length;
 
   const prepared = rows.map((row) => {
-    const tokens = (row.keywords ? row.keywords.split(' ').filter(Boolean) : tokenise(row.content));
+    // The chunk content is the source of truth for matching. The keyword column is
+    // an optimisation: if it disagrees with the text (older writer, hand-edited
+    // row) the content still wins, so a question about "box braids" can never miss
+    // a line that literally says "Box braids".
     const counts = new Map<string, number>();
-    tokens.forEach((token) => counts.set(token, (counts.get(token) ?? 0) + 1));
-    return { row, counts, length: Math.max(tokens.length, 1) };
+    for (const token of tokenise(row.content)) counts.set(token, (counts.get(token) ?? 0) + 1);
+    for (const token of parseKeywordTokens(row.keywords)) {
+      if (!counts.has(token)) counts.set(token, 1);
+    }
+    const length = [...counts.values()].reduce((sum, value) => sum + value, 0);
+    return { row, counts, length: Math.max(length, 1) };
   });
 
   const averageLength = prepared.reduce((sum, item) => sum + item.length, 0) / prepared.length;

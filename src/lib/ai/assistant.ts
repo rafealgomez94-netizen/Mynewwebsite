@@ -447,11 +447,18 @@ function deterministicAnswer(
           tag('AI_RECOMMENDATION', 'Quoted straight from your uploaded document. If the wording has changed, update the document so every answer stays accurate.'),
         );
       } else {
+        // Nothing matched. The refusal has to be the headline — a generic snapshot
+        // in front of it reads like an answer. The snapshot is offered afterwards,
+        // clearly framed as what *can* be answered, never as a reply to the
+        // question that was actually asked.
         L.push(
-          tag('VERIFIED_DATA', `Snapshot for ${businessName}: ${formatNumber(facts.customers.total)} customers, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.appointments.next7Days} upcoming appointments, ${facts.inventory.lowStockCount} product(s) low on stock.`),
+          `[${GROUNDING_LABELS.INSUFFICIENT}] I could not match “${question}” to your stored data or uploaded documents, so I am not guessing. Upload the price list, policy or FAQ that covers it (Knowledge base → Upload), or a member of your team can follow up with the customer directly.`,
         );
         L.push(
-          `[${GROUNDING_LABELS.INSUFFICIENT}] I could not match “${question}” to your stored data or uploaded documents, so I am not guessing. Upload the price list, policy or FAQ that covers it (Knowledge base → Upload) or ask me about customers, sales, stock, appointments or tasks.`,
+          tag(
+            'VERIFIED_DATA',
+            `What I can confirm about ${businessName} instead: ${formatNumber(facts.customers.total)} customers, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.appointments.next7Days} upcoming appointments, ${facts.inventory.lowStockCount} product(s) low on stock.`,
+          ),
         );
       }
       break;

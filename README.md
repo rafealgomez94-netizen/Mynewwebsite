@@ -128,6 +128,7 @@ cp .env.example .env      # set AUTH_SECRET at minimum; AI_API_KEY is optional
 
 # 3. database + demo data
 npm run db:reset          # creates data/workspace-digital.db, applies the schema, seeds
+#   (the app notices the file was replaced and reconnects — no restart needed)
 #   or run them separately:
 npm run db:migrate
 npm run db:seed
@@ -232,6 +233,8 @@ Both schema files are kept structurally identical (same tables, columns and inde
 - **Knowledge retrieval first.** Uploaded documents are split into retrieval units (one line per price-list entry, paragraph-aware for prose), indexed and ranked with BM25 plus prefix/stem matching and IDF weighting (`src/lib/db/repositories/knowledge.ts`). FAQs are matched first.
 - **Confidence is measured, not assumed.** A retrieved chunk must cover the question's distinctive words (`answerCoverage`) — not merely share a common one — before it is quoted. If a term the business never wrote down ("laser hair removal") is missing, the assistant says it does not have enough information instead of answering from a loosely related line. Answers quote the one or two sentences that actually answer the question, from up to two comparable sources, and the response carries the match score and coverage per source.
 - **Re-indexing.** `POST /api/knowledge {"kind":"reindex"}` rebuilds the retrieval index for a workspace (used after tuning the chunking strategy); it is tenant-scoped and safe to run repeatedly.
+- **Storage format is not trusted.** Matching is driven by the chunk text; the keyword column is treated as an optional optimisation and read tolerantly (space-separated token bag *or* a JSON array, so rows written by the seeder or by hand still retrieve).
+- **Grounding inspector (development only).** While signed in, `GET /api/dev/grounding?q=<question>` returns the query tokens, the measured coverage, the ranked chunks and what each one matched. It is scoped to the caller's own workspace (another tenant's records are `403`, anonymous callers are `401`) and returns `404` when `NODE_ENV=production`.
 - **Guardrails.** Every request is sent with the instruction: *"You are an AI business assistant. Use verified business data whenever available. Never invent prices, inventory levels, appointment availability, policies, revenue figures, or customer information. If required information is unavailable, clearly state that you do not have enough information and request human assistance."*
 - **Source labelling.** Answers carry sections labelled **Verified business data**, **Business document** or **AI recommendation**, and reports store `summary_source` as `CALCULATED` or `AI`.
 - **Escalation.** When confidence is low (no FAQ match and no knowledge chunk above the score threshold), the support assistant says a human is needed, collects name/email/phone, opens a support ticket and notifies the owner/staff.
@@ -269,7 +272,8 @@ Every mutating API route resolves the session, requires tenant membership, check
 ## 10. Verification performed
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
-- `npm run smoke` — **75 / 75 checks pass** against the running app (last full run: signup →
+- A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
+- `npm run smoke` — **76 / 76 checks pass** against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -280,6 +284,15 @@ Every mutating API route resolves the session, requires tenant membership, check
     `updateSubscription`) treated an explicitly passed `undefined` as "set to NULL", so a
     partial `PATCH` (e.g. changing only a price) failed with a `NOT NULL` conflict — undefined
     fields are now skipped.
+  - Seeded knowledge was indexed with a JSON array in the keyword column while the application
+    wrote a space-separated token bag, so BM25 saw one unusable mega-token: every question
+    about the demo tenant's price list, policies or opening hours escalated to a human.
+    Retrieval now reads the column tolerantly and derives matches from the chunk text, and the
+    seeder writes the same shape as the app. Both are covered by a regression check.
+  - `npm run db:reset` deletes the database file, so a running server kept reading the deleted
+    inode and served stale data from some routes and fresh data from others. The database layer
+    now detects that the file was replaced and reconnects, so a reset needs no restart
+    (verified: a marker row created before the reset is gone from the API immediately after it).
 - Every marketing, auth, onboarding, dashboard and admin route returns `200` (or an intentional `307` redirect) against the seeded database.
 - Public endpoints verified: `GET /api/public/business?slug=`, `POST /api/support/public` (FAQ-grounded answer, low-confidence escalation creating a ticket), `POST /api/public/book` (booking created, confirmation logged), `GET /api/appointments?availability=true` (real slots from the business hours), `GET /api/documents/[id]/pdf` and `GET /api/reports/[id]/pdf` (valid PDF bytes).
 - AI assistant verified on real data: customer counts, low-stock list, promotion ideas and follow-up questions all cite verified numbers with labelled sections.

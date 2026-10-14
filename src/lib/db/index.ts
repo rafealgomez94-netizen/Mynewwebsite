@@ -35,6 +35,25 @@ function schemaPath(): string {
 }
 
 let handle: DatabaseSync | null = null;
+let handleFile = '';
+let handleSignature = '';
+
+/**
+ * Identity of the database file on disk. `npm run db:reset` deletes and
+ * recreates the file, which leaves any process holding the old handle reading a
+ * deleted inode — a confusing state where some routes see fresh data and others
+ * see stale data. Tracking the inode lets `getDb()` notice the swap and
+ * reconnect instead of requiring a server restart.
+ */
+function fileSignature(file: string): string {
+  try {
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (!stat) return 'missing';
+    return `${stat.ino}:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
+  } catch {
+    return 'missing';
+  }
+}
 
 function connect(): DatabaseSync {
   const file = databaseFile();
@@ -68,7 +87,22 @@ function toPlainRow<T>(row: T): T {
 }
 
 export function getDb(): DatabaseSync {
-  if (!handle) handle = connect();
+  const file = databaseFile();
+  if (handle) {
+    const current = fileSignature(file);
+    // Same file, still present: reuse the connection.
+    if (file === handleFile && current === handleSignature) return handle;
+    // The file was replaced, removed or migrated — drop the stale handle first.
+    try {
+      handle.close();
+    } catch {
+      /* already closed */
+    }
+    handle = null;
+  }
+  handle = connect();
+  handleFile = file;
+  handleSignature = fileSignature(file);
   return handle;
 }
 
@@ -144,5 +178,7 @@ export function closeDb(): void {
   if (handle) {
     handle.close();
     handle = null;
+    handleFile = '';
+    handleSignature = '';
   }
 }

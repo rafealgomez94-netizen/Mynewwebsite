@@ -524,7 +524,7 @@ insert('knowledge_sources', {
 const chunk = (sourceId, heading, content, position) => {
   insert('knowledge_chunks', {
     id: nid('kch'), business_id: businessId, source_id: sourceId, heading, content,
-    keywords: j(content.toLowerCase().split(/\W+/).filter((word) => word.length > 3).slice(0, 24)),
+    keywords: content.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((word) => word.length > 2).join(' '),
     position, created_at: daysAgo(25),
   });
 };

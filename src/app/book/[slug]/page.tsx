@@ -5,6 +5,7 @@ import { findBusinessBySlug, hoursFor, listStaff } from '@/lib/db/repositories/a
 import { listServices } from '@/lib/db/repositories/catalog';
 import { businessTypeLabel } from '@/lib/domain';
 import { formatTime } from '@/lib/utils';
+import { ManagerCard } from '@/components/manager-card';
 import { BookingForm } from '@/components/public/booking-form';
 import { WhatsAppWidget } from '@/components/public/whatsapp-widget';
 
@@ -99,6 +100,10 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
             ))}
           </ul>
         </div>
+      </section>
+
+      <section className="mt-6">
+        <ManagerCard />
       </section>
 
       <p className="muted mt-8 text-center text-xs">

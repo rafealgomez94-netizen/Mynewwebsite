@@ -3,9 +3,12 @@ import { Mail, MessageCircle, Phone } from 'lucide-react';
 import { SUPPORT, SUPPORT_EMAIL, SUPPORT_PHONE } from '@/lib/domain';
 
 /**
- * Manager contact card. Appears on the landing page, in the help section of the
- * dashboard and on the public support/booking pages so a client always knows who
- * they are working with.
+ * Manager contact card — photo plus direct WhatsApp, phone and email.
+ *
+ * Shown on the landing page, the legal pages, the dashboard overview and the
+ * public tenant pages (support chat and online booking) so a client always knows
+ * who they are working with. The photo lives in `public/manager.jpg`; replace it
+ * with `npm run photo:manager -- <path-to-image>`.
  */
 export function ManagerCard({ variant = 'default' }: { variant?: 'default' | 'compact' }) {
   const whatsappLink = SUPPORT.whatsappHref;

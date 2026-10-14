@@ -5,6 +5,7 @@ import { findBusinessBySlug, hoursFor, listStaff } from '@/lib/db/repositories/a
 import { listServices } from '@/lib/db/repositories/catalog';
 import { getSupportSettings } from '@/lib/db/repositories/comms';
 import { businessTypeLabel } from '@/lib/domain';
+import { ManagerCard } from '@/components/manager-card';
 import { SupportChat } from '@/components/public/support-chat';
 import { WhatsAppWidget } from '@/components/public/whatsapp-widget';
 import { formatTime } from '@/lib/utils';
@@ -76,6 +77,10 @@ export default async function SupportWidgetPage({ params }: { params: Promise<{ 
             <li>Team: {listStaff(business.id, true).length}</li>
           </ul>
         </div>
+      </section>
+
+      <section className="mt-6">
+        <ManagerCard />
       </section>
 
       <p className="muted mt-8 text-center text-xs">

@@ -74,6 +74,8 @@ export function createUser(input: {
   phone?: string | null;
   jobTitle?: string | null;
   platformRole?: PlatformRole;
+  /** `INVITED` keeps an invited account inert until the invitee sets a password. */
+  status?: 'ACTIVE' | 'INVITED';
   emailVerifiedAt?: string | null;
   marketingOptIn?: boolean;
 }): UserRow {
@@ -82,7 +84,7 @@ export function createUser(input: {
   run(
     `INSERT INTO users (id, email, password_hash, name, phone, job_title, platform_role, status,
                         email_verified_at, marketing_opt_in, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.email.toLowerCase(),
@@ -91,6 +93,7 @@ export function createUser(input: {
       input.phone ?? null,
       input.jobTitle ?? null,
       input.platformRole ?? 'USER',
+      input.status ?? 'ACTIVE',
       input.emailVerifiedAt ?? null,
       input.marketingOptIn ? 1 : 0,
       now,
@@ -607,6 +610,31 @@ export function listMembers(businessId: string) {
      WHERE m.business_id = ?
      ORDER BY CASE m.role WHEN 'OWNER' THEN 0 WHEN 'ADMIN' THEN 1 WHEN 'MANAGER' THEN 2 ELSE 3 END, u.name`,
     [businessId],
+  );
+}
+
+/**
+ * Invitations waiting for the invitee to set a password. Used by the
+ * accept-invite flow, which is the only place a user may join a business they
+ * were not already part of.
+ */
+export function listPendingInvitations(userId: string) {
+  return all<{
+    member_id: string;
+    role: string;
+    title: string | null;
+    invited_at: string;
+    business_id: string;
+    business_name: string;
+    business_slug: string;
+  }>(
+    `SELECT m.id AS member_id, m.role, m.title, m.created_at AS invited_at,
+            b.id AS business_id, b.name AS business_name, b.slug AS business_slug
+     FROM business_members m
+     JOIN businesses b ON b.id = m.business_id
+     WHERE m.user_id = ? AND m.status = 'INVITED'
+     ORDER BY m.created_at ASC`,
+    [userId],
   );
 }
 

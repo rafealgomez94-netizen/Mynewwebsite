@@ -20,7 +20,7 @@ One workspace holds the customers, sales, appointments, inventory, marketing, do
 A floating WhatsApp widget is present on every public page (number from `NEXT_PUBLIC_SUPPORT_WHATSAPP`, defaulting to the manager's `077 407 5285`), and a manager contact card — photo plus WhatsApp, phone and email — is embedded on the landing page, the legal pages and the tenant support/booking pages.
 
 ### Accounts and onboarding
-- Signup, login, logout, forgot password, password reset, email verification, invitation acceptance (`/login`, `/signup`, `/forgot-password`, `/reset-password`, `/verify-email`, `/accept-invite`, `/logout`).
+- Signup, login, logout, forgot password, password reset, email verification, invitation acceptance (`/login`, `/signup`, `/forgot-password`, `/reset-password`, `/verify-email`, `/accept-invite`, `/logout`). Invited users stay inactive until they accept: `GET /api/auth/accept-invite?token=…` describes the invitation, `POST` sets the password, activates the membership and signs them in.
 - 9-step onboarding wizard (`/onboarding`) collecting business name, type, description, location, phone, email, website, hours, services, products with prices, FAQs, staff, communication preferences, and document uploads (menus, price lists, service catalogues, policies, FAQs, product information) that become the AI knowledge base.
 
 ### Dashboard (tenant workspace)
@@ -209,7 +209,9 @@ Both schema files are kept structurally identical (same tables, columns and inde
 
 - **Server only.** The provider client lives in `src/lib/ai/provider.ts`, reads `AI_API_KEY` from the server environment, and is never imported by a client component.
 - **Minimum data per task.** `src/lib/ai/facts.ts` builds a compact fact pack (counts, totals, stock levels, pipeline, support load, top items) instead of shipping raw tables.
-- **Knowledge retrieval first.** Uploaded documents are chunked, indexed and retrieved with a BM25 ranking (`src/lib/db/repositories/knowledge.ts`) before an answer is produced; FAQs are matched first.
+- **Knowledge retrieval first.** Uploaded documents are split into retrieval units (one line per price-list entry, paragraph-aware for prose), indexed and ranked with BM25 plus prefix/stem matching and IDF weighting (`src/lib/db/repositories/knowledge.ts`). FAQs are matched first.
+- **Confidence is measured, not assumed.** A retrieved chunk must cover the question's distinctive words (`answerCoverage`) — not merely share a common one — before it is quoted. If a term the business never wrote down ("laser hair removal") is missing, the assistant says it does not have enough information instead of answering from a loosely related line. Answers quote the one or two sentences that actually answer the question, from up to two comparable sources, and the response carries the match score and coverage per source.
+- **Re-indexing.** `POST /api/knowledge {"kind":"reindex"}` rebuilds the retrieval index for a workspace (used after tuning the chunking strategy); it is tenant-scoped and safe to run repeatedly.
 - **Guardrails.** Every request is sent with the instruction: *"You are an AI business assistant. Use verified business data whenever available. Never invent prices, inventory levels, appointment availability, policies, revenue figures, or customer information. If required information is unavailable, clearly state that you do not have enough information and request human assistance."*
 - **Source labelling.** Answers carry sections labelled **Verified business data**, **Business document** or **AI recommendation**, and reports store `summary_source` as `CALCULATED` or `AI`.
 - **Escalation.** When confidence is low (no FAQ match and no knowledge chunk above the score threshold), the support assistant says a human is needed, collects name/email/phone, opens a support ticket and notifies the owner/staff.
@@ -253,6 +255,8 @@ Every mutating API route resolves the session, requires tenant membership, check
 - Marketing approval workflow verified: publishing a draft returns `409 approval_required`, approve → publish succeeds.
 - RBAC verified: Staff cannot invite users or change billing (`403`); unauthenticated dashboard access redirects to `/login`; unauthenticated API access returns `401`.
 - Tenant isolation verified with two live tenants.
+- Knowledge grounding verified end to end: a fresh `.txt` upload became searchable from both the public support chat and the dashboard assistant, quoting the exact price line for "how much is the bridal package", resolving inflections and abbreviations ("kerat" → keratin), answering multi-part questions from two different documents, and escalating with a support ticket when asked about a service the business does not offer.
+- Auth flows verified against the live API: forgot-password (no account-existence leak, single-use token, weak passwords rejected, sessions invalidated after reset), email verification (single use), team invitation (invited accounts cannot sign in until accepted; accept-invite sets the password, activates the membership and signs the invitee in).
 
 ---
 

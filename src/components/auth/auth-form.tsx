@@ -18,6 +18,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [devLink, setDevLink] = useState<string | null>(null);
+  const [invite, setInvite] = useState<{ business: string; role: string; email: string } | null>(null);
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -38,6 +39,30 @@ export function AuthForm({ mode }: { mode: Mode }) {
       setLoading(false);
       if (result.ok) {
         setInfo('Your email address is verified. You can continue to your workspace.');
+      } else {
+        setError(result.error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, token]);
+
+  // Invitation links describe the workspace before the invitee sets a password.
+  useEffect(() => {
+    if (mode !== 'invite' || !token) return;
+    let cancelled = false;
+    (async () => {
+      const result = await apiRequest<{
+        invite: { email: string; primary: { business: string; role: string } };
+      }>(`/api/auth/accept-invite?token=${encodeURIComponent(token)}`);
+      if (cancelled) return;
+      if (result.ok) {
+        setInvite({
+          business: result.data.invite.primary.business,
+          role: result.data.invite.primary.role,
+          email: result.data.invite.email,
+        });
       } else {
         setError(result.error);
       }
@@ -138,15 +163,22 @@ export function AuthForm({ mode }: { mode: Mode }) {
           setError('This invitation link is incomplete. Ask your team owner to resend it.');
           return;
         }
-        const result = await apiRequest('/api/auth/reset-password', {
-          body: { token, password: form.password },
-        });
+        const issues = passwordIssues(form.password);
+        if (issues.length) {
+          setError(issues.join('. '));
+          return;
+        }
+        const result = await apiRequest<{ next: string; workspaces: { business: string }[] }>(
+          '/api/auth/accept-invite',
+          { body: { token, password: form.password, ...(form.name ? { name: form.name } : {}) } },
+        );
         if (!result.ok) {
           setError(result.error);
           return;
         }
-        setInfo('Your password is set. Sign in to open the shared workspace.');
-        setTimeout(() => router.push('/login'), 1200);
+        push(`Welcome to ${result.data.workspaces[0]?.business ?? 'your team workspace'}.`, 'success');
+        router.push(result.data.next || '/dashboard');
+        router.refresh();
       }
     } finally {
       setLoading(false);
@@ -171,7 +203,13 @@ export function AuthForm({ mode }: { mode: Mode }) {
     forgot: { heading: 'Reset your password', sub: 'We will email you a secure reset link.', cta: 'Send reset link' },
     reset: { heading: 'Choose a new password', sub: 'Use at least 8 characters with a letter and a number.', cta: 'Update password' },
     verify: { heading: 'Verify your email', sub: 'Confirming the address on your account.', cta: 'Continue' },
-    invite: { heading: 'Join your team workspace', sub: 'Set a password to accept the invitation.', cta: 'Accept invitation' },
+    invite: {
+      heading: invite ? `Join ${invite.business}` : 'Join your team workspace',
+      sub: invite
+        ? `You were invited as ${invite.role.toLowerCase()} for ${invite.email}. Choose a password to accept.`
+        : 'Set a password to accept the invitation.',
+      cta: 'Accept invitation',
+    },
   };
   const copy = titles[mode];
 
@@ -199,6 +237,17 @@ export function AuthForm({ mode }: { mode: Mode }) {
               open link
             </a>
           </Alert>
+        ) : null}
+
+        {mode === 'invite' ? (
+          <Field label="Your name" hint="Optional — shown to the rest of your team.">
+            <Input
+              value={form.name}
+              onChange={(event) => setForm({ ...form, name: event.target.value })}
+              placeholder="Your full name"
+              autoComplete="name"
+            />
+          </Field>
         ) : null}
 
         {mode === 'signup' ? (

@@ -57,6 +57,12 @@ export const resetPasswordSchema = z.object({
   password: passwordSchema,
 });
 
+export const acceptInviteSchema = z.object({
+  token: z.string().min(10, 'Invitation link is invalid'),
+  password: passwordSchema,
+  name: z.string().min(2).max(120).optional(),
+});
+
 export const profileSchema = z.object({
   name: z.string().min(2).max(120),
   phone: z.string().max(40).optional().or(z.literal('')),

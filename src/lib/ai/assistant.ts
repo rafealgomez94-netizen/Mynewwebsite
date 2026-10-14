@@ -9,7 +9,14 @@
 import { callLlm, aiConfigured, aiModel, AI_SYSTEM_GUARDRAIL, type ChatMessage } from '@/lib/ai/provider';
 import { buildFactPack, renderFactPack, type BusinessFactPack } from '@/lib/ai/facts';
 import { calculatedStats, recommendations, type Insight } from '@/lib/ai/analytics';
-import { retrieveChunks, storeAiRun, buildKnowledgeSnapshot, listFaqs } from '@/lib/db/repositories/knowledge';
+import {
+  answerCoverage,
+  composeGroundedAnswer,
+  retrieveChunks,
+  storeAiRun,
+  buildKnowledgeSnapshot,
+  listFaqs,
+} from '@/lib/db/repositories/knowledge';
 import { findBusinessById, hoursFor, type BusinessRow } from '@/lib/db/repositories/accounts';
 import { GROUNDING_LABELS, type GroundingKind } from '@/lib/domain';
 import { formatMoney, formatNumber } from '@/lib/utils';
@@ -33,13 +40,13 @@ export type AssistantIntent =
 
 const INTENT_RULES: { intent: AssistantIntent; patterns: RegExp }[] = [
   { intent: 'CUSTOMER_COUNT', patterns: /\b(how many (new )?customers|new customers|customer (growth|count)|this week'?s customers)\b/i },
-  { intent: 'POPULAR_SERVICES', patterns: /\b(most popular service|popular services|top service|best service|which service)\b/i },
-  { intent: 'LOW_STOCK', patterns: /\b(low (in )?stock|running low|replenish|reorder|out of stock|stock level)\b/i },
-  { intent: 'PROMOTION_IDEA', patterns: /\b(what should (we|i) promote|promote this week|promotion idea|what should we market|deal idea)\b/i },
+  { intent: 'POPULAR_SERVICES', patterns: /\b(most popular service\w*|popular service\w*|top service\w*|best service\w*|which service\w*|most booked)\b/i },
+  { intent: 'LOW_STOCK', patterns: /\b(low (in )?stock|running low|replenish\w*|re-?order\w*|out of stock|stock level\w*|needs? restocking)\b/i },
+  { intent: 'PROMOTION_IDEA', patterns: /\b(what should (we|i) promote|promote this week|promotion\w*|what should we market|deal idea\w*|marketing idea\w*)\b/i },
   { intent: 'FOLLOW_UPS', patterns: /\b(follow[- ]?up|who should (we|i) contact|reach out|customers need attention)\b/i },
-  { intent: 'BEST_SELLERS', patterns: /\b(best[- ]?sell|top sell|most sold|best selling)\b/i },
-  { intent: 'CUSTOMER_ISSUES', patterns: /\b(problems are customers|complaints|customer issues|what are customers reporting|common questions)\b/i },
-  { intent: 'WEEKLY_REPORT', patterns: /\b(weekly report|week report|business report|summary of (the )?week|report for (the )?week)\b/i },
+  { intent: 'BEST_SELLERS', patterns: /\b(best[- ]?sell\w*|top[- ]?sell\w*|most sold|top products?|best products?|best[- ]?performing products?)\b/i },
+  { intent: 'CUSTOMER_ISSUES', patterns: /\b(problems (are|do) customers|complain\w*|customer issues?|what are customers reporting|common questions?|what are customers asking)\b/i },
+  { intent: 'WEEKLY_REPORT', patterns: /\b((weekly|week|monthly|daily|business) report|summary of (the )?(week|month)|report for (the )?(week|month))\b/i },
   { intent: 'MARKETING_CAMPAIGN', patterns: /\b(marketing campaign|campaign plan|advert|campaign idea)\b/i },
   { intent: 'FOLLOW_UP_MESSAGE', patterns: /\b(follow[- ]?up message|message to (a )?customer|write (a )?(whatsapp|sms|email) (to|message)|reminder message)\b/i },
   { intent: 'REVENUE', patterns: /\b(revenue|sales (this|last)|how much did we (make|earn)|income|turnover)\b/i },
@@ -55,7 +62,48 @@ export function detectIntent(question: string): AssistantIntent {
   return 'GENERAL';
 }
 
-export type AssistantSource = { title: string; snippet: string; kind: string; score: number };
+/**
+ * A retrieved chunk only answers a question when it is clearly the best match;
+ * the threshold mirrors the customer-support assistant so both surfaces escalate
+ * rather than guess.
+ */
+export const DOCUMENT_ANSWER_THRESHOLD = 0.9;
+
+function documentAnswer(
+  chunks: {
+    sourceTitle: string;
+    heading: string | null;
+    content: string;
+    score: number;
+    matchedTokens?: string[];
+  }[],
+  question: string,
+  tag: (kind: keyof typeof GROUNDING_LABELS, text: string) => string,
+): string | null {
+  const best = chunks[0];
+  if (!best || best.score < DOCUMENT_ANSWER_THRESHOLD) return null;
+  // A strong score on one shared word is not an answer: the evidence has to cover
+  // the question. Below that, the assistant says it does not know.
+  const evidence = answerCoverage(chunks.slice(0, 3) as { matchedTokens: string[] }[], question);
+  if (evidence.coverage < 0.5 || !evidence.answerable) return null;
+  const quotes = composeGroundedAnswer(chunks.slice(0, 2), question, {
+    maxChunks: 2,
+    maxSentences: 2,
+    withSourceLabels: true,
+  });
+  if (!quotes) return null;
+  return tag('BUSINESS_DOCUMENT', quotes);
+
+}
+
+export type AssistantSource = {
+  title: string;
+  snippet: string;
+  kind: string;
+  score: number;
+  /** Share of the question's words this excerpt contains — shown in the UI. */
+  coverage: number;
+};
 
 export type AssistantAnswer = {
   intent: AssistantIntent;
@@ -174,9 +222,11 @@ function deterministicAnswer(
   facts: BusinessFactPack,
   businessName: string,
   question: string,
+  documents: { sourceTitle: string; heading: string | null; content: string; score: number }[] = [],
 ): { answer: string; suggestions: string[] } {
   const L: string[] = [];
   const tag = (kind: keyof typeof GROUNDING_LABELS, text: string) => `[${GROUNDING_LABELS[kind]}] ${text}`;
+  const fromDocuments = documentAnswer(documents, question, tag);
 
   switch (intent) {
     case 'CUSTOMER_COUNT':
@@ -373,18 +423,37 @@ function deterministicAnswer(
       L.push(tag('AI_RECOMMENDATION', 'Start with overdue items that involve a customer promise, then schedule the rest for the quietest part of your week.'));
       break;
     case 'BUSINESS_PROFILE':
-      L.push(
-        `[${GROUNDING_LABELS.INSUFFICIENT}] I don't have a confident answer for “${question}” from your stored data. This usually means the detail (price, policy or opening hours) has not been added or uploaded yet. Add it in Business settings or upload the document, and I will answer from then on.`,
-      );
+      if (fromDocuments) {
+        L.push(fromDocuments);
+        L.push(
+          tag('AI_RECOMMENDATION', 'This comes from the document you uploaded. Edit the document or the FAQ if anything has changed, and I will quote the new version.'),
+        );
+      } else {
+        L.push(
+          `[${GROUNDING_LABELS.INSUFFICIENT}] I don't have a confident answer for “${question}” from your stored data. This usually means the detail (price, policy or opening hours) has not been added or uploaded yet. Add it in Business settings or upload the document, and I will answer from then on.`,
+        );
+      }
       break;
     case 'GENERAL':
     default:
-      L.push(
-        tag('VERIFIED_DATA', `Snapshot for ${businessName}: ${formatNumber(facts.customers.total)} customers, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.appointments.next7Days} upcoming appointments, ${facts.inventory.lowStockCount} product(s) low on stock.`),
-      );
-      L.push(
-        tag('AI_RECOMMENDATION', 'Ask me for a weekly report, your best sellers, low stock items, who to follow up, or a marketing campaign and I will work from your own data.'),
-      );
+      if (fromDocuments) {
+        // The question matched uploaded material even though it did not match a
+        // built-in intent — answer from the document instead of a generic snapshot.
+        L.push(fromDocuments);
+        L.push(
+          tag('VERIFIED_DATA', `For context: ${formatNumber(facts.customers.total)} customers on file, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.inventory.lowStockCount} product(s) low on stock.`),
+        );
+        L.push(
+          tag('AI_RECOMMENDATION', 'Quoted straight from your uploaded document. If the wording has changed, update the document so every answer stays accurate.'),
+        );
+      } else {
+        L.push(
+          tag('VERIFIED_DATA', `Snapshot for ${businessName}: ${formatNumber(facts.customers.total)} customers, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.appointments.next7Days} upcoming appointments, ${facts.inventory.lowStockCount} product(s) low on stock.`),
+        );
+        L.push(
+          `[${GROUNDING_LABELS.INSUFFICIENT}] I could not match “${question}” to your stored data or uploaded documents, so I am not guessing. Upload the price list, policy or FAQ that covers it (Knowledge base → Upload) or ask me about customers, sales, stock, appointments or tasks.`,
+        );
+      }
       break;
   }
   return {
@@ -440,7 +509,9 @@ export async function askAssistant(input: {
     sections.push({
       kind: 'BUSINESS_DOCUMENT',
       label: GROUNDING_LABELS.BUSINESS_DOCUMENT,
-      items: retrieved.map((chunk) => `${chunk.sourceTitle}${chunk.heading ? ` › ${chunk.heading}` : ''}`),
+      items: retrieved.map(
+        (chunk) => `${chunk.sourceTitle}${chunk.heading ? ` › ${chunk.heading}` : ''} (match ${chunk.score.toFixed(2)})`,
+      ),
     });
   }
 
@@ -455,7 +526,7 @@ export async function askAssistant(input: {
   let model: string | null = null;
   let tokensIn = 0;
   let tokensOut = 0;
-  const fallback = deterministicAnswer(intent, facts, business.name, input.question);
+  const fallback = deterministicAnswer(intent, facts, business.name, input.question, retrieved);
 
   if (aiConfigured()) {
     try {
@@ -509,7 +580,7 @@ export async function askAssistant(input: {
     provider,
     model,
     sources: retrieved.map((chunk) => ({ title: chunk.sourceTitle, score: chunk.score })),
-    grounded: true,
+    grounded: retrieved.some((chunk) => chunk.score >= DOCUMENT_ANSWER_THRESHOLD) || intent !== 'GENERAL',
     tokensIn,
     tokensOut,
     latencyMs,
@@ -525,10 +596,18 @@ export async function askAssistant(input: {
       snippet: chunk.content.slice(0, 240),
       kind: chunk.kind,
       score: chunk.score,
+      coverage: chunk.coverage,
     })),
     provider,
     model,
-    grounded: true,
+    // A GENERAL question that matched no document above the threshold is answered
+    // honestly as "not enough information", so it must not claim grounding.
+    grounded:
+      intent !== 'GENERAL' ||
+      (retrieved.length > 0 &&
+        retrieved[0].score >= DOCUMENT_ANSWER_THRESHOLD &&
+        answerCoverage(retrieved.slice(0, 3), input.question).coverage >= 0.5 &&
+        answerCoverage(retrieved.slice(0, 3), input.question).answerable),
     latencyMs,
     tokens: { in: tokensIn, out: tokensOut },
     suggestions: fallback.suggestions,

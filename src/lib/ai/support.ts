@@ -8,8 +8,11 @@
  */
 import { callLlm, aiConfigured, aiModel, type ChatMessage } from '@/lib/ai/provider';
 import {
+  answerCoverage,
   buildKnowledgeSnapshot,
+  composeGroundedAnswer,
   listFaqs,
+  relevantSentences,
   retrieveChunks,
   storeAiRun,
   bumpFaqAsked,
@@ -115,10 +118,21 @@ export async function answerCustomerQuestion(input: {
     return words.length > 0 && words.filter((word) => question.includes(word)).length >= Math.min(3, words.length);
   });
 
-  // Confidence heuristic: strong retrieval hits or an exact FAQ match are treated
-  // as answerable; everything else is escalated instead of guessed.
-  const confidence = Math.min(1, topScore === 0 ? (faqMatch ? 0.55 : 0) : Math.min(1, topScore / 3.5));
-  const canAnswer = Boolean(faqMatch) || topScore >= 1.2;
+  // Confidence heuristic: a strong retrieval hit *that actually covers the
+  // question*, or an exact FAQ match, is treated as answerable. Anything else is
+  // escalated to a human instead of guessed — never invent prices or policies.
+  const evidence = answerCoverage(retrieved.slice(0, 3), input.question);
+  const confidence = Math.min(
+    1,
+    faqMatch && !retrieved.length
+      ? 0.7
+      : Math.min(1, topScore / 4) * 0.6 + Math.min(1, evidence.coverage / 0.7) * 0.4,
+  );
+  // Answered confidently from the knowledge base — the evidence has to cover the
+  // question's distinctive words, not just share a common one…
+  const canAnswer = Boolean(faqMatch) || (topScore >= 1.2 && evidence.coverage >= 0.5 && evidence.answerable);
+  // …or partially: we know part of the answer and a human should cover the rest.
+  const partialAnswer = !canAnswer && Boolean(retrieved.length) && evidence.coverage >= 0.25;
 
   if (faqMatch) bumpFaqAsked(input.businessId, faqMatch.question);
 
@@ -166,18 +180,64 @@ export async function answerCustomerQuestion(input: {
     }
   }
 
-  if (!replyText && (faqMatch || retrieved.length)) {
+  if (!replyText && (faqMatch || ((canAnswer || partialAnswer) && retrieved.length))) {
     // Deterministic, fully grounded answer assembled from the knowledge base.
     if (faqMatch) {
       replyText = `${faqMatch.answer}`;
     } else {
-      const best = retrieved[0];
-      replyText = `${best.content.slice(0, 420).trim()}${best.content.length > 420 ? '…' : ''}`;
+      replyText =
+        composeGroundedAnswer(retrieved, input.question, { maxChunks: 2, maxSentences: 3 }) ||
+        retrieved[0].content.slice(0, 420).trim();
     }
-    if (replyText.length < 40) replyText = '';
+    if (replyText.length < 20) replyText = '';
   }
 
   const latencyMs = Date.now() - started;
+
+  if (!replyText && partialAnswer) {
+    // Grounded partial answer + a human handover for the part we cannot cover.
+    const quote = composeGroundedAnswer(retrieved, input.question, { maxChunks: 1, maxSentences: 2 });
+    const missing = evidence.missing.slice(0, 4).join(', ');
+    const handover = settings.escalation_message ?? 'I have asked a member of our team to follow up on the rest.';
+    const reply = [
+      quote,
+      missing ? `${handover} They will confirm the rest of your question (${missing}).` : handover,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    storeAiRun({
+      businessId: input.businessId,
+      userId: null,
+      surface: 'SUPPORT',
+      prompt: input.question,
+      response: reply.slice(0, 8000),
+      provider,
+      model,
+      sources: retrieved.map((chunk) => ({ title: chunk.sourceTitle, score: chunk.score })),
+      grounded: true,
+      tokensIn,
+      tokensOut,
+      latencyMs,
+    });
+    return {
+      reply,
+      confidence,
+      escalated: true,
+      escalateReason: 'Answered part of the question from the knowledge base; a human covers the rest.',
+      sources: retrieved.map((chunk) => ({
+        title: chunk.sourceTitle,
+        snippet: chunk.content.slice(0, 200),
+        kind: chunk.kind,
+        score: chunk.score,
+      })),
+      provider,
+      model,
+      tokensIn,
+      tokensOut,
+      latencyMs,
+      needsContactDetails: !(input.contact?.email || input.contact?.phone),
+    };
+  }
 
   if (!replyText) {
     const escalateReason = retrieved.length

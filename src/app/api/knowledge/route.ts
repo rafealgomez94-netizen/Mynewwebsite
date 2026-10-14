@@ -12,6 +12,7 @@ import {
   knowledgeStats,
   listFaqs,
   listSources,
+  reindexSources,
   updateFaq,
 } from '@/lib/db/repositories/knowledge';
 import { incrementUsage, planForBusiness } from '@/lib/db/repositories/platform';
@@ -43,7 +44,14 @@ export async function POST(request: Request) {
     const ctx = requireTenant(await getSessionContext());
     assertPermission(ctx, 'knowledge:write');
     const body = await request.json();
-    const kind = z.enum(['text', 'faq']).parse(body.kind ?? 'text');
+    const kind = z.enum(['text', 'faq', 'reindex']).parse(body.kind ?? 'text');
+
+    if (kind === 'reindex') {
+      // Rebuilds the retrieval index for this workspace only — used after the
+      // chunking strategy changes or when a source was indexed by an older build.
+      const result = reindexSources(ctx.business.id);
+      return ok({ reindexed: result, stats: knowledgeStats(ctx.business.id) });
+    }
 
     if (kind === 'faq') {
       const input = faqSchema.parse(body.data ?? body);

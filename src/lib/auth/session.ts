@@ -141,6 +141,31 @@ export async function issueAuthToken(
   return token;
 }
 
+/**
+ * Resolve a one-time token without consuming it, so a page can greet the invitee
+ * before they submit the form. Consuming happens in `consumeAuthTokenFor`.
+ */
+export async function peekAuthToken(
+  token: string,
+  type: 'EMAIL_VERIFY' | 'PASSWORD_RESET' | 'INVITE',
+): Promise<{ ok: boolean; userId?: string; email?: string; reason?: string }> {
+  const { all } = await import('@/lib/db');
+  const rows = all<{ user_id: string }>(
+    `SELECT DISTINCT user_id FROM auth_tokens WHERE type = ? AND used_at IS NULL`,
+    [type],
+  );
+  for (const row of rows) {
+    const record = findAuthToken(hashToken(token, `${type}:${row.user_id}`), type);
+    if (!record) continue;
+    if (record.used_at) return { ok: false, reason: 'This link has already been used.' };
+    if (new Date(record.expires_at).getTime() < Date.now()) {
+      return { ok: false, reason: 'This link has expired. Ask for a new invitation.' };
+    }
+    return { ok: true, userId: record.user_id, email: record.email };
+  }
+  return { ok: false, reason: 'This link is not valid.' };
+}
+
 export async function consumeAuthTokenFor(
   token: string,
   type: 'EMAIL_VERIFY' | 'PASSWORD_RESET' | 'INVITE',

@@ -18,6 +18,13 @@ export async function POST(request: Request) {
     if (!user || !(await verifyPassword(input.password, user.password_hash))) {
       return fail(401, 'Email or password is incorrect.', 'invalid_credentials');
     }
+    if (user.status === 'INVITED') {
+      return fail(
+        403,
+        'This invitation has not been accepted yet. Open the link in your invitation email to set your password.',
+        'invitation_pending',
+      );
+    }
     if (user.status !== 'ACTIVE') {
       return fail(403, 'This account has been suspended. Contact support for help.', 'account_suspended');
     }

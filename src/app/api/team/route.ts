@@ -65,6 +65,8 @@ export async function POST(request: Request) {
         passwordHash: randomPassword,
         name: input.name || input.email.split('@')[0],
         jobTitle: input.title || null,
+        // Stays inert (and unpickable) until the invitation link is accepted.
+        status: 'INVITED',
       });
       userId = created.id;
     }

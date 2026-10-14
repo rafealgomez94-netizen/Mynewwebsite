@@ -41,6 +41,44 @@ const STOP_WORDS = new Set([
   'why', 'all', 'any', 'into', 'out', 'about', 'more', 'most', 'some', 'such', 'than', 'does', 'did', 'its', 'also',
 ]);
 
+/**
+ * Words that appear in almost every business question but say nothing about which
+ * document should answer it ("what time do you close", "how much is it"). They are
+ * allowed to be missing from the evidence; every other word in the question must be
+ * covered before an answer is presented as grounded.
+ */
+const GENERIC_QUERY_WORDS = new Set([
+  'time', 'close', 'closing', 'open', 'opening', 'price', 'prices', 'pricing', 'cost', 'costs', 'much', 'many',
+  'offer', 'offers', 'provide', 'provides', 'available', 'availability', 'book', 'booking', 'bookings', 'need',
+  'need', 'want', 'know', 'service', 'services', 'product', 'products', 'help', 'please', 'thanks', 'hello',
+  'quote', 'quotes', 'pay', 'payment', 'payments', 'accept', 'accepts', 'take', 'takes', 'long', 'today',
+  'tomorrow', 'week', 'month', 'year', 'best', 'good', 'popular', 'recommend', 'detail', 'details', 'info',
+  'information', 'option', 'options', 'policy', 'policies', 'team', 'staff', 'location', 'address', 'contact',
+  'email', 'phone', 'number', 'website', 'hours', 'business', 'work', 'working', 'different', 'charge',
+]);
+
+/** Query words that carried the question into a document rather than a specific fact. */
+export function distinctiveTokens(tokens: string[]): string[] {
+  return tokens.filter((token) => !GENERIC_QUERY_WORDS.has(token));
+}
+
+/** Crude suffix stripping so "include"/"including", "refund"/"refunds" match. */
+function stem(token: string): string {
+  const stripped = token.replace(/(ing|ed|es|s)$/, '');
+  if (stripped.length < 4) return token;
+  // "include" and "included" already share a stem; trailing -e would split them.
+  const trimmed = stripped.replace(/e$/, '');
+  return trimmed.length >= 4 ? trimmed : stripped;
+}
+
+/** True when two tokens describe the same term (prefix or shared stem). */
+function sameTerm(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length >= 5 && b.startsWith(a)) return true;
+  if (b.length >= 5 && a.startsWith(b)) return true;
+  return stem(a) === stem(b);
+}
+
 export function tokenise(text: string): string[] {
   return text
     .toLowerCase()
@@ -49,19 +87,135 @@ export function tokenise(text: string): string[] {
     .filter((token) => token.length > 2 && !STOP_WORDS.has(token));
 }
 
-/** Splits a document into overlapping word windows so retrieval stays relevant. */
+/**
+ * A line that is only a title (SHOUTY, short, no figures or sentence punctuation)
+ * carries no answer on its own — indexing it would let "?" style questions match
+ * a document heading instead of real content.
+ */
+function isHeadingLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length < 12 || trimmed.length > 90) return false;
+  const letters = trimmed.replace(/[^A-Za-z]/g, '');
+  if (!letters || letters !== letters.toUpperCase()) return false;
+  return !/[0-9:]/.test(trimmed) && trimmed.split(/\s+/).length <= 12;
+}
+
+/**
+ * Splits a document into retrieval units.
+ *
+ * Business documents are usually structured: a menu or price list is one item per
+ * line, a policy is one clause per paragraph. Chunking those by a fixed word count
+ * would bury a single price inside 120 words of unrelated text, so paragraphs and
+ * lines are kept intact and only merged while they still fit the target size.
+ * Long prose paragraphs fall back to overlapping word windows.
+ */
 export function chunkText(text: string, targetWords = 120, overlapWords = 25): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
-  if (words.length <= targetWords) return [words.join(' ')];
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < words.length) {
-    chunks.push(words.slice(start, start + targetWords).join(' '));
-    if (start + targetWords >= words.length) break;
-    start += targetWords - overlapWords;
+  const normalised = text.replace(/\r\n?/g, '\n').trim();
+  if (!normalised) return [];
+
+  const units: { text: string; atomic: boolean }[] = [];
+  for (const block of normalised.split(/\n{2,}/)) {
+    const lines = block
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length > 3) {
+      // A list-like block (price list, service menu, policy clauses): every line is
+      // its own retrieval unit so "how much is X" matches the X line, not the page.
+      // Title-style lines are dropped — they are headings, not content.
+      units.push(
+        ...lines
+          .filter((line) => !isHeadingLine(line))
+          .map((line) => ({ text: line, atomic: true })),
+      );
+    } else if (lines.length > 1) {
+      units.push(...lines.map((line) => ({ text: line, atomic: false })));
+    } else if (lines.length === 1) {
+      units.push({ text: lines[0], atomic: false });
+    }
   }
-  return chunks;
+  if (!units.length) return [];
+
+  const wordCount = (value: string) => value.split(/\s+/).filter(Boolean).length;
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let currentWords = 0;
+
+  const flush = () => {
+    if (current.length) {
+      chunks.push(current.join('\n'));
+      current = [];
+      currentWords = 0;
+    }
+  };
+
+  for (const unit of units) {
+    const words = wordCount(unit.text);
+    if (unit.atomic) {
+      flush();
+      chunks.push(unit.text);
+      continue;
+    }
+    if (words > targetWords) {
+      // A single oversized paragraph: window it with overlap.
+      flush();
+      const tokens = unit.text.split(/\s+/).filter(Boolean);
+      let start = 0;
+      while (start < tokens.length) {
+        chunks.push(tokens.slice(start, start + targetWords).join(' '));
+        if (start + targetWords >= tokens.length) break;
+        start += targetWords - overlapWords;
+      }
+      continue;
+    }
+    if (currentWords + words > targetWords) flush();
+    current.push(unit.text);
+    currentWords += words;
+  }
+  flush();
+  return chunks.filter((chunk) => chunk.trim().length > 0);
+}
+
+/**
+ * Picks the sentences inside a retrieved chunk that actually answer the question.
+ * Keeps answers short and quotable instead of dumping a whole page back at the user.
+ */
+export function relevantSentences(content: string, query: string, max = 2): string[] {
+  const sentences = content
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 12);
+  if (sentences.length <= max) return sentences;
+
+  const queryTokens = new Set(tokenise(query));
+  if (!queryTokens.size) return sentences.slice(0, max);
+
+  const scored = sentences.map((sentence, index) => {
+    const tokens = tokenise(sentence);
+    let score = 0;
+    for (const token of tokens) {
+      for (const queryToken of queryTokens) {
+        if (sameTerm(queryToken, token)) {
+          score += 1;
+          break;
+        }
+      }
+    }
+    // Normalise for length so one long sentence does not win by accident.
+    return { sentence, index, score: score / Math.sqrt(tokens.length || 1) };
+  });
+
+  const ranked = scored.filter((item) => item.score > 0).sort((left, right) => right.score - left.score);
+  if (!ranked.length) return sentences.slice(0, max);
+
+  const strongest = ranked[0].score;
+  const chosen = ranked
+    .filter((item) => item.score >= strongest * 0.45)
+    .slice(0, max)
+    .sort((left, right) => left.index - right.index)
+    .map((item) => item.sentence);
+
+  return chosen.length ? chosen : [ranked[0].sentence];
 }
 
 /** Detects markdown-ish headings so retrieved chunks can be labelled with a section. */
@@ -124,6 +278,37 @@ export function createSource(
   return get<KnowledgeSourceRow>('SELECT * FROM knowledge_sources WHERE business_id = ? AND id = ?', [businessId, id])!;
 }
 
+/**
+ * Rebuilds the chunk index for every source in a workspace using the current
+ * chunking strategy. Safe to run repeatedly; used after tuning or when a source
+ * was indexed by an older version.
+ */
+export function reindexSources(businessId: string): { sources: number; chunks: number } {
+  const sources = all<{ id: string; raw_text: string | null; title: string }>(
+    `SELECT id, raw_text, title FROM knowledge_sources WHERE business_id = ?`,
+    [businessId],
+  );
+  let chunks = 0;
+  const at = nowIso();
+  for (const source of sources) {
+    run('DELETE FROM knowledge_chunks WHERE business_id = ? AND source_id = ?', [businessId, source.id]);
+    const pieces = chunkText(source.raw_text ?? '');
+    pieces.forEach((piece, index) => {
+      run(
+        `INSERT INTO knowledge_chunks (id, business_id, source_id, heading, content, keywords, position, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [newId('kbc'), businessId, source.id, detectHeading(piece, index), piece, tokenise(piece).join(' '), index, at],
+      );
+    });
+    run(
+      `UPDATE knowledge_sources SET chunk_count = ?, status = ?, updated_at = ? WHERE business_id = ? AND id = ?`,
+      [pieces.length, pieces.length ? 'READY' : 'FAILED', at, businessId, source.id],
+    );
+    chunks += pieces.length;
+  }
+  return { sources: sources.length, chunks };
+}
+
 export function deleteSource(businessId: string, id: string): void {
   run('DELETE FROM knowledge_chunks WHERE business_id = ? AND source_id = ?', [businessId, id]);
   run('DELETE FROM knowledge_sources WHERE business_id = ? AND id = ?', [businessId, id]);
@@ -156,6 +341,8 @@ export type RetrievedChunk = {
   kind: string;
   content: string;
   score: number;
+  coverage: number;
+  matchedTokens: string[];
 };
 
 /**
@@ -163,6 +350,106 @@ export type RetrievedChunk = {
  * application layer so the identical code works on SQLite and PostgreSQL.
  * Only the highest-scoring chunks are ever sent to the language model.
  */
+/**
+ * Builds the user-facing answer from retrieved evidence.
+ *
+ * Shared by the business assistant and the customer-support assistant so both
+ * quote exactly the sentences that answer the question, from up to `maxChunks`
+ * comparable sources, with duplicated and heading-only lines removed.
+ */
+export function composeGroundedAnswer(
+  chunks: {
+    sourceTitle: string;
+    heading: string | null;
+    content: string;
+    score: number;
+    matchedTokens?: string[];
+  }[],
+  question: string,
+  options: { maxChunks?: number; maxSentences?: number; withSourceLabels?: boolean } = {},
+): string {
+  const { maxChunks = 2, maxSentences = 3, withSourceLabels = false } = options;
+  const best = chunks[0];
+  if (!best) return '';
+
+  const strip = (content: string) =>
+    content
+      .split('\n')
+      .filter((line, index) => !(index === 0 && line.trim().length <= 90 && line.trim() === line.trim().toUpperCase()))
+      .join('\n')
+      .trim();
+
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  const covered = new Set<string>();
+  for (const chunk of chunks.slice(0, Math.max(1, maxChunks))) {
+    const tokens = chunk.matchedTokens ?? [];
+    const addsSomething = distinctiveTokens(tokens).some((token) => !covered.has(token));
+    // Include a chunk when it is nearly as relevant as the best one, or when it
+    // covers a part of the question the first chunk did not ("closing time on
+    // Thursday" + "price of a kids haircut" live in different lines).
+    if (parts.length && !addsSomething && chunk.score < best.score * 0.7) continue;
+    if (!chunk.content?.trim()) continue;
+    for (const token of tokens) covered.add(token);
+    const sentences = relevantSentences(strip(chunk.content) || chunk.content, question, maxSentences);
+    for (const sentence of sentences) {
+      const key = sentence.toLowerCase().replace(/\s+/g, ' ');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      parts.push(
+        withSourceLabels
+          ? `${chunk.sourceTitle}${chunk.heading ? ` › ${chunk.heading}` : ''}: ${sentence}`
+          : sentence,
+      );
+    }
+  }
+  return parts.join(withSourceLabels ? '\n\n' : ' ');
+}
+
+/**
+ * Minimum share of the question's content words a chunk must contain before it is
+ * treated as a possible answer. Without this, a single shared word (for example
+ * "hair") would let the assistant quote an unrelated line with confidence.
+ */
+export const MIN_COVERAGE = 0.15;
+
+/**
+ * How much of the question the retrieved evidence actually covers, across chunks.
+ *
+ * A per-chunk threshold alone would reject legitimate multi-part questions ("what
+ * time do you close and how much is a haircut?"), because each part lives in a
+ * different line. The union over the top chunks is the honest measure of whether
+ * the knowledge base can answer — and `missing` tells the assistant which part to
+ * hand to a human instead of guessing.
+ */
+export function answerCoverage(
+  chunks: { matchedTokens: string[] }[],
+  question: string,
+): {
+  coverage: number;
+  matched: string[];
+  missing: string[];
+  missingRequired: string[];
+  answerable: boolean;
+} {
+  const queryTokens = [...new Set(tokenise(question))];
+  if (!queryTokens.length) return { coverage: 0, matched: [], missing: [], missingRequired: [], answerable: false };
+  const matched = new Set<string>();
+  for (const chunk of chunks) for (const token of chunk.matchedTokens) matched.add(token);
+  const matchedList = queryTokens.filter((token) => matched.has(token));
+  const missing = queryTokens.filter((token) => !matched.has(token));
+  // A distinctive term the knowledge base never mentions ("laser", "refund policy
+  // for gift vouchers") means we cannot answer that part — escalate instead.
+  const missingRequired = missing.filter((token) => !GENERIC_QUERY_WORDS.has(token));
+  return {
+    coverage: matchedList.length / queryTokens.length,
+    matched: matchedList,
+    missing,
+    missingRequired,
+    answerable: missingRequired.length === 0 && (queryTokens.length === 0 ? false : matchedList.length > 0),
+  };
+}
+
 export function retrieveChunks(businessId: string, query: string, limit = 5): RetrievedChunk[] {
   const rows = all<{
     id: string;
@@ -203,15 +490,54 @@ export function retrieveChunks(businessId: string, query: string, limit = 5): Re
     documentFrequencies.set(token, frequency);
   }
 
+  // Prefix expansion: business language is full of long nouns (keratin, postnatal,
+  // manicure) that people abbreviate or misspell. A chunk token that starts with a
+  // query token counts for less than an exact hit but still finds the right line.
+  const prefixMatches = new Map<string, Map<string, number>>();
+  for (const token of queryTokens) {
+    const matches = new Map<string, number>();
+    for (const [, counts] of prepared.map((item) => [item.row.id, item.counts] as const)) {
+      for (const [word, count] of counts) {
+        if (word !== token && sameTerm(token, word)) {
+          matches.set(word, (matches.get(word) ?? 0) + count);
+        }
+      }
+    }
+    if (matches.size) prefixMatches.set(token, matches);
+  }
+
   return prepared
     .map((item) => {
       let score = 0;
       for (const token of queryTokens) {
-        const frequency = item.counts.get(token);
-        if (!frequency) continue;
         const documentsWithToken = documentFrequencies.get(token) ?? 0;
         const idf = Math.log(1 + (docCount - documentsWithToken + 0.5) / (documentsWithToken + 0.5));
-        score += idf * ((frequency * (K1 + 1)) / (frequency + K1 * (1 - B + (B * item.length) / averageLength)));
+        const frequency = item.counts.get(token);
+        if (frequency) {
+          score += idf * ((frequency * (K1 + 1)) / (frequency + K1 * (1 - B + (B * item.length) / averageLength)));
+        }
+        const expansions = prefixMatches.get(token);
+        if (!expansions) continue;
+        let expanded = 0;
+        for (const [word] of expansions) expanded += item.counts.get(word) ?? 0;
+        if (!expanded) continue;
+        score +=
+          0.7 * idf * ((expanded * (K1 + 1)) / (expanded + K1 * (1 - B + (B * item.length) / averageLength)));
+      }
+      const covered = new Set<string>();
+      for (const token of queryTokens) {
+        if (item.counts.has(token)) {
+          covered.add(token);
+          continue;
+        }
+        const expansions = prefixMatches.get(token);
+        if (!expansions) continue;
+        for (const word of expansions.keys()) {
+          if (item.counts.has(word)) {
+            covered.add(token);
+            break;
+          }
+        }
       }
       return {
         id: item.row.id,
@@ -222,9 +548,14 @@ export function retrieveChunks(businessId: string, query: string, limit = 5): Re
         kind: item.row.kind,
         content: item.row.content,
         score,
+        // Share of the question's meaningful words this chunk actually contains.
+        // BM25 alone always finds *something*; coverage stops a stray word from
+        // passing as an answer.
+        coverage: queryTokens.length ? covered.size / queryTokens.length : 0,
+        matchedTokens: [...covered],
       };
     })
-    .filter((chunk) => chunk.score > 0)
+    .filter((chunk) => chunk.score > 0 && chunk.coverage >= MIN_COVERAGE)
     .sort((left, right) => right.score - left.score)
     .slice(0, Math.min(Math.max(limit, 1), 12));
 }

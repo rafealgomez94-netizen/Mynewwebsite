@@ -146,7 +146,7 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, RBAC and tenant isolation — **75 checks in total**. It creates its own
+billing, invitations, RBAC and tenant isolation — **84 checks in total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -154,6 +154,11 @@ safe to run against a development database.
 npm run smoke                          # defaults to http://127.0.0.1:3000
 SMOKE_BASE_URL=http://127.0.0.1:3100 npm run smoke
 npm run verify                         # typecheck + smoke
+
+npm run verify:extraction              # PDF / DOCX text extraction (offline, no server)
+npm run audit:clients                  # client → API contract audit (static)
+npm run audit:clients -- --live        # …and against the running app
+npm run probe:shapes                   # dump live response keys of the main endpoints
 ```
 
 Two notes for repeated runs:
@@ -280,7 +285,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **77 / 77 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **84 / 84 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -316,6 +321,50 @@ Every mutating API route resolves the session, requires tenant membership, check
 - Knowledge grounding verified end to end: a fresh `.txt` upload became searchable from both the public support chat and the dashboard assistant, resolving inflections and abbreviations ("kerat" → keratin), answering multi-part questions from two different documents, and escalating with a support ticket when asked about a service the business does not offer.
 - The demo workspace answers from its seeded documents again: "How much are box braids?" → N$350, "How much is a kids haircut?" → N$120, "Do you require a deposit for braiding?" → 30%, "What are your opening hours on Thursday?" → 09:00–19:00, "Can I pay by card?" → cash/card/EFT, while "Do you do laser hair removal?" and "How much is the bridal package?" correctly hand over to a human and raise a ticket.
 - Auth flows verified against the live API: forgot-password (no account-existence leak, single-use token, weak passwords rejected, sessions invalidated after reset), email verification (single use), team invitation (invited accounts cannot sign in until accepted; accept-invite sets the password, activates the membership and signs the invitee in).
+
+### Document extraction (PDF and DOCX)
+
+- `npm run verify:extraction` — **15 / 15 checks pass**. The suite builds a real compressed PDF
+  with `pdf-lib`, a real three-paragraph DOCX (a ZIP archive) and a text-free PDF, then asserts
+  what the extractor returns for each.
+- Bugs this found and that are now fixed:
+  - Uploaded PDFs and DOCX files were indexed as raw bytes: PDF page text lives inside
+    `FlateDecode` streams and DOCX text inside a ZIP, so decoding either as `latin1` produced a
+    few kilobytes of `obj`, `endstream` and binary noise. The knowledge base was therefore
+    searchable only by accident, and questions about an uploaded invoice or policy escalated to a
+    human. `src/lib/services/document-text.ts` now inflates the PDF content streams and reads
+    `word/document.xml` out of the DOCX archive (`zlib` only, no new dependency), and the storage
+    layer delegates to it.
+  - The heuristic fallback for PDFs whose text cannot be recovered accepted `%PDF-1.4` syntax as
+    prose. It now requires 240 characters and 30 distinct words, and a source extracted this way
+    is stored with an explicit `warning` instead of silently indexing junk.
+  - `POST /api/knowledge/upload` returned `500` for a non-multipart body; it now validates the
+    content type and returns `400 bad_request` (multipart uploads are unaffected).
+- Verified live: an invoice PDF exported by the app and re-uploaded became 29 chunks of real
+  text (`Corporate wellness quote … QUO-20261015-0001`), and the public support chat then answered
+  a question about the document's package code without escalating. A DOCX policy file became one
+  chunk and answered a question about its cancellation clause. A text-free scanned PDF is stored
+  with a warning and no binary fields.
+
+### Documents API
+
+- `DELETE /api/documents` was missing (the dashboard asked for it and received `405`) — added with
+  audit logging, returning `404` for an unknown id, `422` for `{}` and `401` anonymously.
+- `POST /api/documents` silently dropped the `total`, `tax` and `notes` fields the documents form
+  sent, and defaulted to USD regardless of the workspace currency. The generator schema now takes
+  `amount`, `tax`, `notes` and an optional `currency` that the route resolves from the workspace —
+  a `N$900` quote is now stored with `total_cents 90000` and prints `NAD 900` with its tax lines
+  and notes in the PDF.
+- `npm run audit:clients` — a TypeScript-AST audit of every `apiRequest` / `fetch` call in
+  `src/components/**` against the routes they target: route existence, exported method, body keys
+  (including keys built in component state) and the expected response shape (`--live` confirms the
+  shapes against the running app). It audits 88 calls and is what surfaced the two documents bugs
+  above. `npm run probe:shapes` dumps the live response keys of 23 endpoints for comparison.
+- Dead code removed and the gate locked: `tsconfig.json` now sets `noUnusedLocals` and
+  `noUnusedParameters`, which the codebase satisfies with zero errors. This deleted a 97-line
+  superseded fact-pack builder in the assistant (the LLM prompt already receives
+  `renderFactPack(facts)`), an unreachable onboarding-wizard state, and 13 unused imports/helpers.
+
 
 ---
 

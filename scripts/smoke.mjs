@@ -15,6 +15,7 @@
  * end, so the demo data stays untouched. It exits non-zero if any check fails.
  */
 import { DatabaseSync } from 'node:sqlite';
+import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -45,6 +46,10 @@ class Session {
   }
 
   async request(method, pathname, options = {}) {
+    return this.send(method, pathname, options, true);
+  }
+
+  async send(method, pathname, options, allowRetry) {
     const headers = { ...(options.headers || {}) };
     if (this.cookies.size) {
       headers.cookie = [...this.cookies].map(([key, value]) => `${key}=${value}`).join('; ');
@@ -56,17 +61,37 @@ class Session {
       headers['content-type'] = 'application/json';
       payload = JSON.stringify(options.body);
     }
-    const response = await fetch(`${BASE}${pathname}`, {
-      method,
-      headers,
-      body: payload,
-      redirect: 'manual',
-    });
+    let response;
+    try {
+      response = await fetch(`${BASE}${pathname}`, {
+        method,
+        headers,
+        body: payload,
+        redirect: 'manual',
+      });
+    } catch (error) {
+      // A dev server recompiles routes on first use and can drop the connection
+      // while it does. Retry just this request once the server answers again;
+      // checks that mutate state assert deltas, so a rare double-apply cannot
+      // produce a false failure.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!allowRetry || !/fetch failed|ECONNREFUSED|socket hang up|other side closed|terminated/i.test(message)) {
+        throw error;
+      }
+      await waitForServer(120000);
+      return this.send(method, pathname, options, false);
+    }
     const rawCookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
     for (const cookie of rawCookies.length ? rawCookies : [response.headers.get('set-cookie')].filter(Boolean)) {
       const [pair] = cookie.split(';');
       const index = pair.indexOf('=');
       if (index > 0) this.cookies.set(pair.slice(0, index).trim(), pair.slice(index + 1).trim());
+    }
+    if (options.binary) {
+      // PDFs and other compressed uploads must be handled as bytes: decoding them
+      // as UTF-8 replaces invalid sequences and corrupts the file under test.
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return { status: response.status, json: null, text: buffer.toString('latin1'), buffer, headers: response.headers };
     }
     const text = await response.text();
     let json = null;
@@ -80,6 +105,9 @@ class Session {
 
   get(pathname) {
     return this.request('GET', pathname);
+  }
+  getBinary(pathname) {
+    return this.request('GET', pathname, { binary: true });
   }
   post(pathname, body, options = {}) {
     return this.request('POST', pathname, { body, ...options });
@@ -145,6 +173,58 @@ function signIn(session, email, password) {
 
 function signUp(session, payload) {
   return authCall('POST', session, '/api/auth/signup', payload);
+}
+
+/**
+ * Builds a minimal but real DOCX (a ZIP archive containing word/document.xml) so
+ * the DOCX ingestion path can be exercised without shipping a binary fixture.
+ */
+function buildDocx(lines) {
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+    lines.map((line) => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`).join('') +
+    '</w:body></w:document>';
+  const files = [
+    ['[Content_Types].xml', '<?xml version="1.0"?><Types/>'],
+    ['word/document.xml', xml],
+  ];
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, content] of files) {
+    const data = Buffer.from(content, 'utf8');
+    const compressed = zlib.deflateRawSync(data);
+    const nameBuffer = Buffer.from(name, 'utf8');
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuffer.length, 26);
+    parts.push(local, nameBuffer, compressed);
+
+    const directory = Buffer.alloc(46);
+    directory.writeUInt32LE(0x02014b50, 0);
+    directory.writeUInt16LE(20, 4);
+    directory.writeUInt16LE(20, 6);
+    directory.writeUInt16LE(8, 10);
+    directory.writeUInt32LE(compressed.length, 20);
+    directory.writeUInt32LE(data.length, 24);
+    directory.writeUInt16LE(nameBuffer.length, 28);
+    directory.writeUInt32LE(offset, 42);
+    central.push(directory, nameBuffer);
+    offset += local.length + nameBuffer.length + compressed.length;
+  }
+  const centralBuffer = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralBuffer.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, centralBuffer, end]);
 }
 
 async function check(name, fn) {
@@ -403,12 +483,28 @@ await check('product is created with stock settings', async () => {
 });
 
 await check('stock adjustment records a movement and changes the level', async () => {
+  // Asserted as a delta: the absolute level depends on what earlier steps did,
+  // and a retried request must not be able to turn this into a false failure.
+  const before = await owner.get('/api/products');
+  const start = (before.json.data.products ?? []).find((entry) => entry.id === productId)?.quantity ?? 0;
+
   const res = await owner.patch('/api/products', { adjust: { productId, type: 'OUT', quantity: 8, note: 'smoke test' } });
   eq(res.status, 200, 'stock adjustment');
+
   const list = await owner.get('/api/products');
   const product = (list.json.data.products ?? []).find((entry) => entry.id === productId);
-  eq(product.quantity, 2, 'quantity after adjustment');
-  return '10 → 2 after OUT 8';
+  eq(product.quantity, Math.max(0, start - 8), 'quantity after adjustment');
+
+  // The movement journal is joined to the product, so it identifies the row by
+  // product name rather than by id.
+  const movements = list.json.data.movements ?? [];
+  assert(
+    movements.some(
+      (movement) => movement.product_name === 'Smoke Shampoo' && movement.type === 'OUT' && movement.quantity === 8,
+    ),
+    `the adjustment was not journalled as a stock movement (got ${JSON.stringify(movements.slice(0, 3))})`,
+  );
+  return `${start} → ${product.quantity} after OUT 8 (movement recorded)`;
 });
 
 await check('low-stock detection reports the product', async () => {
@@ -564,7 +660,11 @@ await check('lead is created and moves through the pipeline', async () => {
 // ---------------------------------------------------------------------------
 // 6. Orders, inventory linkage
 // ---------------------------------------------------------------------------
+let stockBeforeSale = 0;
+
 await check('order is created from a service and a product', async () => {
+  const beforeOrder = await owner.get('/api/products');
+  stockBeforeSale = (beforeOrder.json.data.products ?? []).find((entry) => entry.id === productId)?.quantity ?? 0;
   const res = await owner.post('/api/orders', {
     customerId,
     status: 'PAID',
@@ -586,8 +686,9 @@ await check('order is created from a service and a product', async () => {
 await check('selling a product decrements stock', async () => {
   const list = await owner.get('/api/products');
   const product = (list.json.data.products ?? []).find((entry) => entry.id === productId);
-  eq(product.quantity, 1, 'quantity after the sale');
-  return '2 → 1';
+  const expected = Math.max(0, stockBeforeSale - 1);
+  eq(product.quantity, expected, 'quantity after the sale');
+  return `${stockBeforeSale} → ${product.quantity}`;
 });
 
 await check('order status can be advanced', async () => {
@@ -974,6 +1075,136 @@ await check('document exports to a real PDF', async () => {
   eq(res.status, 200, 'document PDF');
   assert(res.text.startsWith('%PDF-'), 'response is not a PDF');
   return `${Math.round(res.text.length / 1024)} KB PDF`;
+});
+
+await check('a document can be deleted, and only once', async () => {
+  // The documents board has a delete action; the route has to export DELETE or
+  // the browser gets a 405 and the button appears to do nothing.
+  const created = await owner.post('/api/documents', { type: 'SOP', instructions: 'Delete-me document' });
+  eq(created.status, 201, 'create document');
+  const id = created.json.data.document.id;
+
+  const removed = await owner.del('/api/documents', { id });
+  eq(removed.status, 200, 'delete document');
+  eq(removed.json.data.deleted, true, 'deleted flag');
+  assert(!(removed.json.data.documents ?? []).some((doc) => doc.id === id), 'the document is still listed');
+
+  const again = await owner.del('/api/documents', { id });
+  eq(again.status, 404, 'deleting a missing document');
+  const anonymous = await anon.del('/api/documents', { id });
+  eq(anonymous.status, 401, 'anonymous delete');
+  return 'deleted once, 404 on repeat, 401 anonymous';
+});
+
+await check('document amount, tax and notes reach the document', async () => {
+  // The form collects these three fields; the API dropped them, so a typed
+  // invoice amount never appeared on the invoice.
+  const res = await owner.post('/api/documents', {
+    type: 'INVOICE',
+    title: 'Smoke amount invoice',
+    amount: '1250.50',
+    tax: '187.58',
+    notes: 'Smoke note: payment by EFT only.',
+    dueDate: '2026-12-01',
+  });
+  eq(res.status, 201, 'generate invoice with an amount');
+  const doc = res.json.data.document;
+  eq(doc.total_cents, 143808, 'subtotal + tax');
+  assert(doc.content_text.includes('1,250.50'), 'subtotal missing from the document');
+  assert(doc.content_text.includes('187.58'), 'tax missing from the document');
+  assert(doc.content_text.includes('Smoke note: payment by EFT only.'), 'notes missing from the document');
+  return 'amount + tax + notes stored';
+});
+
+await check('documents use the workspace currency', async () => {
+  const profile = await owner.get('/api/business/profile');
+  const currency = (profile.json.data.businesses ?? []).find((b) => b.id === businessId)?.currency;
+  assert(currency, 'workspace currency missing');
+  const res = await owner.post('/api/documents', { type: 'QUOTE', title: 'Currency check', amount: '500' });
+  eq(res.status, 201, 'quote');
+  eq(res.json.data.document.currency, currency, 'document currency follows the workspace');
+  return `documents are issued in ${currency}`;
+});
+
+await check('uploads reject a non-multipart body with a clear message', async () => {
+  const res = await owner.post('/api/knowledge/upload', {});
+  eq(res.status, 400, 'JSON body to the upload route');
+  eq(res.json.error.code, 'bad_request', 'error code');
+  return '400 instead of a 500';
+});
+
+await check('an exported PDF becomes searchable knowledge', async () => {
+  // Round trip: the app writes a PDF, the owner uploads it back as knowledge and
+  // the AI has to be able to quote it. Compressed PDF streams used to be indexed
+  // as binary noise, which made every uploaded PDF unsearchable.
+  const generated = await owner.post('/api/documents', {
+    type: 'QUOTE',
+    title: 'Corporate wellness quote',
+    amount: '9750',
+    notes: 'Package code ZEPHYRQUARTZ.',
+  });
+  eq(generated.status, 201, 'generate the source document');
+  const pdf = await owner.getBinary(`/api/documents/${generated.json.data.document.id}/pdf`);
+  eq(pdf.status, 200, 'export the PDF');
+  assert(pdf.buffer.subarray(0, 5).toString() === '%PDF-', 'not a PDF');
+
+  const form = new FormData();
+  form.set('kind', 'CATALOG');
+  form.set('files', new File([pdf.buffer], 'round-trip.pdf', { type: 'application/pdf' }));
+  const uploaded = await owner.request('POST', '/api/knowledge/upload', { form });
+  eq(uploaded.status, 201, 'upload the exported PDF');
+  const source = uploaded.json.data.created[0];
+  assert(source.chunks > 0, 'the PDF produced no knowledge chunks');
+
+  const inspector = await owner.get(`/api/dev/grounding?q=${encodeURIComponent('ZEPHYRQUARTZ')}`);
+  eq(inspector.status, 200, 'grounding inspector');
+  const top = inspector.json.data.chunks?.[0]?.content ?? '';
+  assert(top.includes('ZEPHYRQUARTZ'), `the PDF text is not retrievable: ${top.slice(0, 80)}`);
+  assert(!/stream|endstream|FlateDecode/.test(top), 'binary PDF noise was indexed as knowledge');
+  return 'exported PDF re-uploaded and searchable';
+});
+
+await check('a DOCX upload becomes searchable knowledge', async () => {
+  const docx = buildDocx([
+    'SMOKE STUDIO POLICY',
+    'Late cancellations are charged 50% of the service price. Code DOCXGLIMMER.',
+    'Gift vouchers never expire at this studio.',
+  ]);
+  const form = new FormData();
+  form.set('kind', 'POLICY');
+  form.set('files', new File([docx], 'smoke-policy.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
+  assert(Buffer.isBuffer(docx) && docx.subarray(0, 2).toString() === 'PK', 'the fixture is not a ZIP archive');
+  const uploaded = await owner.request('POST', '/api/knowledge/upload', { form });
+  eq(uploaded.status, 201, 'upload the DOCX');
+  assert(uploaded.json.data.created[0].chunks > 0, 'the DOCX produced no chunks');
+
+  const inspector = await owner.get(`/api/dev/grounding?q=${encodeURIComponent('DOCXGLIMMER')}`);
+  const top = inspector.json.data.chunks?.[0]?.content ?? '';
+  assert(top.includes('DOCXGLIMMER'), `DOCX text is not retrievable: ${top.slice(0, 80)}`);
+  assert(!top.includes('PK') && !top.includes('<w:'), 'ZIP/XML noise was indexed');
+  return 'DOCX unzipped and searchable';
+});
+
+await check('a PDF with no text is flagged instead of indexed as noise', async () => {
+  // An image-only or unreadable PDF must not become hundreds of junk chunks.
+  const emptyPdf = '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n';
+  const form = new FormData();
+  form.set('kind', 'UPLOAD');
+  form.set('files', new File([emptyPdf], 'scan.pdf', { type: 'application/pdf' }));
+  const uploaded = await owner.request('POST', '/api/knowledge/upload', { form });
+  eq(uploaded.status, 201, 'upload the text-free PDF');
+  const source = uploaded.json.data.created[0];
+  assert(source.warning, 'the owner was not warned that nothing could be read');
+
+  const before = await owner.get('/api/knowledge');
+  const stored = (before.json.data.sources ?? []).find((entry) => entry.id === source.id);
+  assert(stored, 'the source was not stored');
+  const db = new DatabaseSync(dbFilePath());
+  const raw = db.prepare('SELECT raw_text FROM knowledge_sources WHERE id = ?').get(source.id)?.raw_text ?? '';
+  db.close();
+  assert(!/stream|FlateDecode|endstream/.test(raw), 'binary noise was stored as knowledge');
+  assert(/no readable content|not readable|scanned/i.test(raw), `expected an explanatory note, got: ${raw.slice(0, 120)}`);
+  return 'owner warned; no binary indexed';
 });
 
 await check('daily, weekly and monthly reports are generated and exported', async () => {

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Download, FileText, Plus, Printer, Trash2 } from 'lucide-react';
-import { Badge, Button, Card, CardHeader, Field, Input, Modal, Select, StatusBadge, Textarea, apiRequest, useToast } from '@/components/ui';
+import { Badge, Button, Card, Field, Input, Modal, Select, StatusBadge, Textarea, apiRequest, useToast } from '@/components/ui';
 import { DOCUMENT_TYPES, documentTypeLabel } from '@/lib/domain';
 import { formatMoney } from '@/lib/utils';
 
@@ -59,7 +59,13 @@ export function DocumentsWorkspace({
   const generate = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
-    const result = await apiRequest<{ document: DocumentRow }>('/api/documents', { body: form });
+    // `total` is the field name the form keeps the amount in; the API calls it
+    // `amount`. Sending the raw form object silently dropped the amount, the tax
+    // and the notes, so map them explicitly.
+    const { total, ...rest } = form;
+    const result = await apiRequest<{ document: DocumentRow }>('/api/documents', {
+      body: { ...rest, amount: total },
+    });
     setBusy(false);
     if (!result.ok) {
       push(result.error, 'danger');

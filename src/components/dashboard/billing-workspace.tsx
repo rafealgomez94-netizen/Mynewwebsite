@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, CreditCard, Sparkles } from 'lucide-react';
-import { Alert, Badge, Button, Card, CardHeader, Field, Progress, Select, StatusBadge, apiRequest, useToast } from '@/components/ui';
+import { Alert, Badge, Button, Card, CardHeader, Progress, Select, StatusBadge, apiRequest, useToast } from '@/components/ui';
 import { formatDate, formatMoney } from '@/lib/utils';
 
 type Plan = {

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus, Shield, UserPlus, Users } from 'lucide-react';
-import { Alert, Badge, Button, Card, CardHeader, Field, Input, Modal, Select, StatusBadge, Tabs, apiRequest, useToast } from '@/components/ui';
+import { Alert, Badge, Button, Card, Field, Input, Modal, Select, StatusBadge, Tabs, apiRequest, useToast } from '@/components/ui';
 import { BUSINESS_ROLES, ROLE_PERMISSIONS, roleLabel } from '@/lib/domain';
 import { formatDate } from '@/lib/utils';
 

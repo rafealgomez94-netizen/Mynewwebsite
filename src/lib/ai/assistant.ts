@@ -17,7 +17,7 @@ import {
   buildKnowledgeSnapshot,
   listFaqs,
 } from '@/lib/db/repositories/knowledge';
-import { findBusinessById, hoursFor, type BusinessRow } from '@/lib/db/repositories/accounts';
+import { findBusinessById, hoursFor } from '@/lib/db/repositories/accounts';
 import { GROUNDING_LABELS, type GroundingKind } from '@/lib/domain';
 import { formatMoney, formatNumber } from '@/lib/utils';
 
@@ -119,103 +119,6 @@ export type AssistantAnswer = {
   suggestions: string[];
 };
 
-function intentFacts(intent: AssistantIntent, facts: BusinessFactPack): string[] {
-  const base: string[] = [];
-  switch (intent) {
-    case 'CUSTOMER_COUNT':
-      base.push(
-        `Customers total: ${facts.customers.total}`,
-        `New customers last 7 days: ${facts.customers.newThisWeek}`,
-        `New customers last 30 days: ${facts.customers.newThisMonth}`,
-        `Status mix: ${facts.customers.byStatus.map((row) => `${row.status}=${row.c}`).join(', ') || 'no customers recorded yet'}`,
-      );
-      break;
-    case 'POPULAR_SERVICES':
-      base.push(
-        facts.sales.popularServices.length
-          ? `Bookings by service: ${facts.sales.popularServices
-              .map((service) => `${service.name} = ${service.bookings} bookings at ${formatMoney(service.priceCents)}`)
-              .join('; ')}`
-          : 'No service bookings recorded yet.',
-      );
-      break;
-    case 'LOW_STOCK':
-      base.push(
-        facts.inventory.lowStock.length
-          ? `Products at or below minimum: ${facts.inventory.lowStock
-              .map((product) => `${product.name} (${product.quantity} left, min ${product.minStock})`)
-              .join('; ')}`
-          : 'No products are at or below their minimum stock level.',
-        `Total products at/below minimum: ${facts.inventory.lowStockCount}`,
-        `Fast movers: ${facts.inventory.fastMoving.map((product) => `${product.name} (${product.unitsSold} sold)`).join('; ') || 'none recorded'}`,
-      );
-      break;
-    case 'BEST_SELLERS':
-      base.push(
-        facts.sales.topItems.length
-          ? `Best sellers last 30 days: ${facts.sales.topItems
-              .map((item) => `${item.name} — ${item.units} units, ${formatMoney(item.revenueCents)}`)
-              .join('; ')}`
-          : 'No orders recorded in the last 30 days.',
-        `Fast moving stock: ${facts.inventory.fastMoving.map((product) => `${product.name} (${product.unitsSold} units)`).join('; ') || 'none'}`,
-      );
-      break;
-    case 'FOLLOW_UPS':
-      base.push(
-        facts.customers.followUp.length
-          ? `Customers with no interaction for 30+ days: ${facts.customers.followUp
-              .map((customer) => `${customer.name} (${customer.status}, ${customer.phone ?? customer.email ?? 'no contact detail'})`)
-              .join('; ')}`
-          : 'No customers are overdue for follow-up.',
-        facts.leads.staleFollowUps.length
-          ? `Stale leads: ${facts.leads.staleFollowUps.map((lead) => `${lead.name} (${lead.stage})`).join('; ')}`
-          : 'No stale leads.',
-      );
-      break;
-    case 'CUSTOMER_ISSUES':
-      base.push(
-        facts.support.frequentTopics.length
-          ? `Recurring customer questions: ${facts.support.frequentTopics.map((topic) => `${topic.topic} (${topic.count})`).join('; ')}`
-          : 'No customer issues recorded yet.',
-        `Open conversations: ${facts.support.openConversations}; open tickets: ${facts.support.openTickets}.`,
-      );
-      break;
-    case 'REVENUE':
-      base.push(
-        `Revenue last 7 days: ${formatMoney(facts.revenue.weekCents)} from ${facts.revenue.weekOrders} orders`,
-        `Revenue previous 7 days change: ${facts.revenue.weekChangePct.toFixed(1)}%`,
-        `Revenue last 30 days: ${formatMoney(facts.revenue.monthCents)} from ${facts.revenue.monthOrders} orders, average order ${formatMoney(facts.revenue.monthAverageCents)}`,
-        `Sales channels (30d): ${facts.sales.channels.map((channel) => `${channel.channel}=${formatMoney(channel.revenueCents)}`).join('; ') || 'no channel data'}`,
-      );
-      break;
-    case 'APPOINTMENTS':
-      base.push(
-        `Appointments last 7 days: ${facts.appointments.last7Days} (${facts.appointments.completedLast7Days} completed, ${facts.appointments.cancelledLast7Days} cancelled or no-show)`,
-        `Appointments next 7 days: ${facts.appointments.next7Days}`,
-        facts.appointments.upcoming.length
-          ? `Next appointments: ${facts.appointments.upcoming
-              .map((appointment) => `${appointment.title} at ${appointment.startAt}${appointment.staff ? ` with ${appointment.staff}` : ''}`)
-              .join('; ')}`
-          : 'No upcoming appointments scheduled.',
-      );
-      break;
-    case 'TASKS':
-      base.push(
-        `Task counts: ${facts.tasks.byStatus.map((row) => `${row.status}=${row.c}`).join(', ') || 'no tasks'}`,
-        `Overdue tasks: ${facts.tasks.overdue}`,
-      );
-      break;
-    case 'WEEKLY_REPORT':
-    case 'PROMOTION_IDEA':
-    case 'MARKETING_CAMPAIGN':
-    case 'FOLLOW_UP_MESSAGE':
-    case 'GENERAL':
-    default:
-      base.push(...renderFactPack(facts).split('\n'));
-      break;
-  }
-  return base;
-}
 
 function deterministicAnswer(
   intent: AssistantIntent,

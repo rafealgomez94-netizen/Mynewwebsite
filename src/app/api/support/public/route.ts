@@ -11,7 +11,7 @@ import {
   getSupportSettings,
 } from '@/lib/db/repositories/comms';
 import { findBusinessBySlug, findBusinessById } from '@/lib/db/repositories/accounts';
-import { createCustomer, findCustomersByIds } from '@/lib/db/repositories/crm';
+import { createCustomer,} from '@/lib/db/repositories/crm';
 import { answerCustomerQuestion, supportWidgetIntro } from '@/lib/ai/support';
 import { incrementUsage } from '@/lib/db/repositories/platform';
 import { notify } from '@/lib/services/notify';
@@ -121,7 +121,6 @@ export async function POST(request: Request) {
               tags: ['support'],
               notes: `Escalated from AI support: ${input.message.slice(0, 200)}`,
             }).id;
-        void findCustomersByIds;
       }
       if (customerId) updateConversation(business.id, conversationId, { customerId });
 

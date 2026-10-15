@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { newId } from '@/lib/utils';
+import { extractDocx, extractPdf } from '@/lib/services/document-text';
 
 /**
  * File storage abstraction for uploaded business documents.
@@ -79,43 +80,22 @@ export async function extractText(file: { name: string; type: string; size: numb
   }
 
   if (file.type === 'application/pdf' || lower.endsWith('.pdf')) {
-    const { PDFDocument } = await import('pdf-lib');
-    try {
-      const pdf = await PDFDocument.load(file.buffer, { ignoreEncryption: true, updateMetadata: false });
-      void pdf.getPageCount();
-    } catch {
-      /* fall through to raw-stream extraction */
-    }
-    const raw = file.buffer.toString('latin1');
-    const text = raw
-      .replace(/\r\n/g, '\n')
-      // PDFs store visible text inside BT/ET blocks; parentheses hold literal strings.
-      .replace(/[^\x20-\x7E\n]/g, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    const readable = text.length > 40 ? text : '';
+    const extraction = extractPdf(file.buffer);
     return {
-      text: readable,
+      text: extraction.text,
       fileType: 'application/pdf',
       size: file.size,
-      warning: readable
-        ? 'PDF text was extracted heuristically. Review the extracted content if the document uses scanned images.'
-        : 'This PDF appears to contain scanned images only. Paste the key text manually for best AI answers.',
+      warning: extraction.warning,
     };
   }
 
   if (lower.endsWith('.docx') || file.type.includes('wordprocessingml')) {
-    const raw = file.buffer.toString('latin1');
-    const text = raw
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/[^\x20-\x7E\n]/g, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
+    const extraction = extractDocx(file.buffer);
     return {
-      text,
+      text: extraction.text,
       fileType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       size: file.size,
-      warning: 'DOCX text was extracted heuristically.',
+      warning: extraction.warning,
     };
   }
 

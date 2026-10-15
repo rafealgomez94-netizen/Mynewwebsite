@@ -313,8 +313,15 @@ export const documentGenerateSchema = z.object({
     )
     .max(60)
     .optional(),
-  currency: z.string().length(3).default('USD'),
+  // No default: the route falls back to the workspace currency, so documents are
+  // never stamped USD in a NAD business just because the form omits the field.
+  currency: z.string().length(3).optional(),
   dueDate: z.string().max(40).optional().or(z.literal('')),
+  // Amount/tax/notes are entered on the documents form. They used to be dropped
+  // silently by the schema, so a typed invoice amount never reached the document.
+  amount: z.union([z.string(), z.number()]).optional(),
+  tax: z.union([z.string(), z.number()]).optional(),
+  notes: z.string().max(2000).optional().or(z.literal('')),
 });
 
 export const marketingGenerateSchema = z.object({

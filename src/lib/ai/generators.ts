@@ -320,6 +320,12 @@ export async function generateDocument(input: {
   items?: { name: string; quantity: number; unitPrice: string | number }[];
   currency: string;
   dueDate?: string | null;
+  /** Manual amount (excl. tax) entered on the documents form. */
+  amount?: string | number;
+  /** Tax amount entered on the documents form. */
+  tax?: string | number;
+  /** Free-text notes appended to the document. */
+  notes?: string;
 }): Promise<{ document: GeneratedDocument; provider: string }> {
   const business = findBusinessById(input.businessId);
   if (!business) throw new Error('Business not found');
@@ -333,9 +339,23 @@ export async function generateDocument(input: {
       totalCents: Math.round(item.quantity * unitPriceCents),
     };
   });
+
+  // The form lets the user type an amount directly (no itemised lines). Honour it
+  // as a single line so the figure the user typed is what the document shows.
+  const manualAmountCents = input.amount !== undefined ? parseMoneyToCents(input.amount) : 0;
+  if (!lines.length && manualAmountCents > 0) {
+    lines.push({
+      name: input.title?.trim() || 'Amount',
+      quantity: 1,
+      unitPriceCents: manualAmountCents,
+      totalCents: manualAmountCents,
+    });
+  }
+
   const subtotalCents = lines.reduce((sum, line) => sum + line.totalCents, 0);
-  const taxCents = 0;
+  const taxCents = input.tax !== undefined ? Math.max(0, parseMoneyToCents(input.tax)) : 0;
   const totalCents = subtotalCents + taxCents;
+  const notes = input.notes?.trim();
 
   const typeLabels: Record<string, string> = {
     INVOICE: 'Invoice',
@@ -365,6 +385,7 @@ export async function generateDocument(input: {
     },
     currency: input.currency,
     dueDate: input.dueDate ?? null,
+    totals: { subtotalCents, taxCents, totalCents },
   });
 
   let sections = fallbackSections;
@@ -392,7 +413,10 @@ Return STRICT JSON: {"sections":[{"heading":"...","body":"..."}]}`,
                   .map((line) => `${line.name} x${line.quantity} @ ${formatMoney(line.unitPriceCents, input.currency)} = ${formatMoney(line.totalCents, input.currency)}`)
                   .join('; ')}`
               : '',
-            `TOTALS (authoritative): subtotal ${formatMoney(subtotalCents, input.currency)}, total ${formatMoney(totalCents, input.currency)}`,
+            `TOTALS (authoritative): subtotal ${formatMoney(subtotalCents, input.currency)}${
+              taxCents ? `, tax ${formatMoney(taxCents, input.currency)}` : ''
+            }, total ${formatMoney(totalCents, input.currency)}`,
+            notes ? `NOTES TO INCLUDE VERBATIM: ${notes}` : '',
             `INSTRUCTIONS: ${input.instructions ?? 'none'}`,
             retrieved.length ? `RELEVANT BUSINESS DOCUMENTS: ${retrieved.map((chunk) => chunk.content.slice(0, 400)).join(' | ')}` : '',
             `REQUIRED SECTIONS: ${
@@ -430,6 +454,10 @@ Return STRICT JSON: {"sections":[{"heading":"...","body":"..."}]}`,
     }
   }
 
+  // Notes are the user's own words: appended after any generated section so they
+  // are never rewritten by the model, and kept in the stored content.
+  if (notes) sections = [...sections, { heading: 'Notes', body: notes }];
+
   const contentText = [
     title,
     `Issued by ${business.name}${business.phone ? ` · ${business.phone}` : ''}${business.email ? ` · ${business.email}` : ''}`,
@@ -461,9 +489,14 @@ function buildDocumentSections(input: {
   factsSummary: { customers: number; revenue30: string; topItems: string[]; lowStock: string[]; upcoming: number };
   currency: string;
   dueDate: string | null;
+  totals: { subtotalCents: number; taxCents: number; totalCents: number };
 }): { heading: string; body: string }[] {
   const hello = input.customerName ? `Dear ${input.customerName},` : 'Dear customer,';
-  const totalText = formatMoney(input.lines.reduce((sum, line) => sum + line.totalCents, 0), input.currency);
+  const totalText = formatMoney(input.totals.totalCents, input.currency);
+  // Tax only appears when the user entered it, so totals stay buildable.
+  const breakdown = input.totals.taxCents
+    ? `\nSubtotal: ${formatMoney(input.totals.subtotalCents, input.currency)}\nTax: ${formatMoney(input.totals.taxCents, input.currency)}\nTotal: ${totalText}`
+    : `\nTotal: ${totalText}`;
   const intro = `${hello}\n\nThank you for working with ${input.businessName}.${
     input.instructions ? ` ${input.instructions}` : ''
   }`;
@@ -473,7 +506,7 @@ function buildDocumentSections(input: {
     case 'RECEIPT':
       return [
         { heading: 'Summary', body: intro },
-        { heading: 'Amount due', body: `Total: ${totalText}${input.dueDate ? `\nDue date: ${input.dueDate}` : ''}` },
+        { heading: 'Amount due', body: `${breakdown.trim()}${input.dueDate ? `\nDue date: ${input.dueDate}` : ''}` },
         { heading: 'Payment terms', body: 'Payment is due on the date shown above. Please reference the document number when paying.' },
         { heading: 'Thank you', body: `We appreciate your business. For any question about this ${input.type.toLowerCase()}, reply to this message and we will help.` },
       ];

@@ -15,7 +15,18 @@ export async function POST(request: Request) {
     const ctx = requireTenant(await getSessionContext());
     assertPermission(ctx, 'knowledge:write');
 
-    const form = await request.formData();
+    // A body that is not multipart (a client sending JSON by mistake) must come
+    // back as a clear 400, not an opaque 500 "something went wrong".
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      throw new HttpError(
+        400,
+        'Upload the file as multipart/form-data with a "files" field.',
+        'bad_request',
+      );
+    }
     const files = form.getAll('files').filter((entry): entry is File => entry instanceof File);
     const kind = String(form.get('kind') ?? 'UPLOAD');
     if (!files.length) throw new HttpError(400, 'Choose at least one file to upload.', 'no_files');

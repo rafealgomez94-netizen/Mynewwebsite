@@ -20,7 +20,6 @@ import {
   LogOut,
   Menu,
   Megaphone,
-  MessageSquare,
   Receipt,
   Search,
   ClipboardList,

@@ -45,10 +45,8 @@ const STEPS = [
 ];
 
 export function OnboardingWizard({
-  businessId,
   initial,
 }: {
-  businessId?: string;
   initial?: {
     name?: string;
     type?: string;
@@ -77,7 +75,6 @@ export function OnboardingWizard({
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [id, setId] = useState<string | undefined>(businessId);
   const [progressNote, setProgressNote] = useState<string | null>(null);
 
   const [business, setBusiness] = useState({
@@ -136,7 +133,6 @@ export function OnboardingWizard({
           setError(result.error);
           return;
         }
-        setId(result.data.business.id);
         setProgressNote('Business created. Continue to add contact details.');
         setStep(1);
         return;

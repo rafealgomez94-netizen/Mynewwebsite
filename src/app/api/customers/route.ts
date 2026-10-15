@@ -3,7 +3,7 @@ import { customerSchema } from '@/lib/validation';
 import { getSessionContext } from '@/lib/auth/session';
 import { assertPermission, requireTenant } from '@/lib/auth/rbac';
 import { createCustomer, listCustomers, countCustomers } from '@/lib/db/repositories/crm';
-import { planForBusiness, usageCount, incrementUsage } from '@/lib/db/repositories/platform';
+import { planForBusiness, incrementUsage } from '@/lib/db/repositories/platform';
 import { notify } from '@/lib/services/notify';
 import { HttpError } from '@/lib/auth/rbac';
 
@@ -59,7 +59,6 @@ export async function POST(request: Request) {
     });
 
     incrementUsage(ctx.business.id, 'CUSTOMERS');
-    void usageCount(ctx.business.id, 'CUSTOMERS');
     await notify({
       businessId: ctx.business.id,
       type: 'NEW_CUSTOMER',

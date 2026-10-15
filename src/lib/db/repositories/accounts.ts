@@ -148,10 +148,13 @@ export function updateUser(
   run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, params);
 }
 
-export function markUserLogin(id: string, ip?: string, userAgent?: string): void {
+/**
+ * Records the last successful sign-in. The IP and user agent of each session are
+ * stored on `sessions` (see `createSession`) and on the login audit entry, so
+ * nothing is lost here.
+ */
+export function markUserLogin(id: string): void {
   run(`UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?`, [nowIso(), nowIso(), id]);
-  void ip;
-  void userAgent;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import {
   Activity,
-  BadgeCheck,
   BarChart3,
   Bot,
   Boxes,
@@ -14,7 +13,6 @@ import {
   FileText,
   Gauge,
   Layers,
-  LineChart,
   Lock,
   MessageSquare,
   Megaphone,
@@ -35,7 +33,7 @@ import { DemoForm } from '@/components/marketing/demo-form';
 import { ManagerCard } from '@/components/manager-card';
 import { Badge, Button, StatusBadge } from '@/components/ui';
 import { PLAN_CATALOGUE } from '@/lib/db/repositories/platform';
-import { APP_NAME, SUPPORT, SUPPORT_EMAIL, SUPPORT_PHONE, WHATSAPP_DEFAULT_MESSAGE, whatsappHref } from '@/lib/domain';
+import { SUPPORT, SUPPORT_EMAIL, SUPPORT_PHONE, WHATSAPP_DEFAULT_MESSAGE, whatsappHref } from '@/lib/domain';
 import { formatMoney } from '@/lib/utils';
 
 const PROBLEMS = [

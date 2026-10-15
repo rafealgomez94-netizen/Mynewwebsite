@@ -55,8 +55,7 @@ export default async function OnboardingPage() {
           </p>
         </div>
         <OnboardingWizard
-          businessId={existing?.id}
-          initial={
+            initial={
             existing
               ? {
                   name: existing.name,

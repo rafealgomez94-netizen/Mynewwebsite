@@ -1,4 +1,4 @@
-import { all, get, json, nowIso, run, tx } from '@/lib/db';
+import { all, get, nowIso, run, tx } from '@/lib/db';
 import { newId } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------

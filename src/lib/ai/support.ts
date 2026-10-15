@@ -12,7 +12,6 @@ import {
   buildKnowledgeSnapshot,
   composeGroundedAnswer,
   listFaqs,
-  relevantSentences,
   retrieveChunks,
   storeAiRun,
   bumpFaqAsked,

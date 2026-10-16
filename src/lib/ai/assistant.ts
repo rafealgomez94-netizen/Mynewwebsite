@@ -39,16 +39,19 @@ export type AssistantIntent =
   | 'GENERAL';
 
 const INTENT_RULES: { intent: AssistantIntent; patterns: RegExp }[] = [
+  // Asking the assistant to *write* something comes first: "write a follow-up message
+  // for the customers who have not booked" is a request to draft, not to list, and the
+  // first matching rule wins. The data questions below stay strictly read-only.
+  { intent: 'FOLLOW_UP_MESSAGE', patterns: /\b(follow[- ]?up (message|note|reminder)|message to (a )?customer|reminder message|(write|draft|compose|prepare) (a |an )?(whatsapp|sms|email|e-mail|text|dm|message|note|reply|reminder)( (message|note|reply|update))? (to|for)\b)/i },
+  { intent: 'WEEKLY_REPORT', patterns: /\b((write|draft|generate|create|prepare) (a )?(weekly|week|monthly|daily|business) report|(weekly|week|monthly|daily|business) report|summary of (the )?(week|month)|report for (the )?(week|month))\b/i },
+  { intent: 'MARKETING_CAMPAIGN', patterns: /\b((create|write|draft|generate|plan) (a )?(marketing )?campaign|marketing campaign|campaign plan|advert|campaign idea)\b/i },
   { intent: 'CUSTOMER_COUNT', patterns: /\b(how many (new )?customers|new customers|customer (growth|count)|this week'?s customers)\b/i },
   { intent: 'POPULAR_SERVICES', patterns: /\b(most popular service\w*|popular service\w*|top service\w*|best service\w*|which service\w*|most booked)\b/i },
   { intent: 'LOW_STOCK', patterns: /\b(low (in )?stock|running low|replenish\w*|re-?order\w*|out of stock|stock level\w*|needs? restocking)\b/i },
   { intent: 'PROMOTION_IDEA', patterns: /\b(what should (we|i) promote|promote this week|promotion\w*|what should we market|deal idea\w*|marketing idea\w*)\b/i },
-  { intent: 'FOLLOW_UPS', patterns: /\b(follow[- ]?up|who should (we|i) contact|reach out|customers need attention)\b/i },
+  { intent: 'FOLLOW_UPS', patterns: /\b(follow[- ]?up(?! (message|note|reminder))|who should (we|i) contact|reach out|customers need attention)\b/i },
   { intent: 'BEST_SELLERS', patterns: /\b(best[- ]?sell\w*|top[- ]?sell\w*|most sold|top products?|best products?|best[- ]?performing products?)\b/i },
   { intent: 'CUSTOMER_ISSUES', patterns: /\b(problems (are|do) customers|complain\w*|customer issues?|what are customers reporting|common questions?|what are customers asking)\b/i },
-  { intent: 'WEEKLY_REPORT', patterns: /\b((weekly|week|monthly|daily|business) report|summary of (the )?(week|month)|report for (the )?(week|month))\b/i },
-  { intent: 'MARKETING_CAMPAIGN', patterns: /\b(marketing campaign|campaign plan|advert|campaign idea)\b/i },
-  { intent: 'FOLLOW_UP_MESSAGE', patterns: /\b(follow[- ]?up message|message to (a )?customer|write (a )?(whatsapp|sms|email) (to|message)|reminder message)\b/i },
   { intent: 'REVENUE', patterns: /\b(revenue|sales (this|last)|how much did we (make|earn)|income|turnover)\b/i },
   { intent: 'APPOINTMENTS', patterns: /\b(appointment|booking|schedule|calendar)\b/i },
   { intent: 'TASKS', patterns: /\b(task|to[- ]?do|overdue work|what should (we|i) do today)\b/i },

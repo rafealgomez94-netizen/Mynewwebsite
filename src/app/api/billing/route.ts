@@ -3,6 +3,7 @@ import { planChangeSchema } from '@/lib/validation';
 import { getSessionContext } from '@/lib/auth/session';
 import { assertPermission, requireTenant } from '@/lib/auth/rbac';
 import {
+  aiAllowanceUsed,
   listPlans,
   planForBusiness,
   updateSubscription,
@@ -38,6 +39,16 @@ export async function GET() {
         accessUntil: entitlement.accessUntil,
       },
       usage: usageSnapshot(ctx.business.id),
+      /**
+       * The staff assistant and the public support widget are metered separately but spend the
+       * same `aiMessages` allowance. Reporting it here keeps a client from reading two counts
+       * against one limit and concluding there is headroom that the API would refuse.
+       */
+      aiAllowance: {
+        used: aiAllowanceUsed(ctx.business.id),
+        limit: plan.limits.aiMessages,
+        sharedBy: ['AI_MESSAGES', 'SUPPORT_MESSAGES'],
+      },
       liveCounts: {
         customers: countCustomers(ctx.business.id),
         users: countMembers(ctx.business.id),

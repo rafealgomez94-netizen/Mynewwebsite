@@ -19,12 +19,24 @@ export async function GET() {
   try {
     const ctx = requireTenant(await getSessionContext());
     assertPermission(ctx, 'billing:read');
-    const { plan, subscription } = planForBusiness(ctx.business.id);
+    const { plan, subscription, entitlement, subscribedPlanCode } = planForBusiness(ctx.business.id);
     const provider = process.env.PAYMENT_PROVIDER || 'manual';
     return ok({
       plan,
       plans: listPlans(),
       subscription,
+      /**
+       * `plan` is what the tenant is metered against right now; `subscription.plan_code` is what
+       * they signed up for. They differ while a checkout is unpaid or a period has lapsed, and
+       * the client uses this to say so rather than showing limits the tenant does not have.
+       */
+      entitlement: {
+        entitled: entitlement.entitled,
+        reason: entitlement.reason,
+        effectivePlanCode: plan.code,
+        subscribedPlanCode,
+        accessUntil: entitlement.accessUntil,
+      },
       usage: usageSnapshot(ctx.business.id),
       liveCounts: {
         customers: countCustomers(ctx.business.id),

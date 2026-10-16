@@ -6,6 +6,7 @@ import { assertPermission, HttpError, requireTenant } from '@/lib/auth/rbac';
 import {
   addMember,
   countMembers,
+  countSeats,
   createUser,
   findMembership,
   findUserByEmail,
@@ -28,7 +29,13 @@ export async function GET() {
     const { plan } = planForBusiness(ctx.business.id);
     return ok({
       members: listMembers(ctx.business.id),
-      limits: { users: plan.limits.users, used: countMembers(ctx.business.id), plan: plan.name },
+      limits: {
+        users: plan.limits.users,
+        // `used` counts pending invitations too — they hold a seat the moment they are sent.
+        used: countSeats(ctx.business.id),
+        active: countMembers(ctx.business.id),
+        plan: plan.name,
+      },
       auditLogs: ctx.role === 'OWNER' || ctx.role === 'ADMIN' ? listAuditLogs(ctx.business.id, 40) : [],
     });
   } catch (error) {
@@ -43,8 +50,16 @@ export async function POST(request: Request) {
     const input = await parseBody(request, memberInviteSchema);
 
     const { plan } = planForBusiness(ctx.business.id);
-    if (countMembers(ctx.business.id) >= plan.limits.users) {
-      throw new HttpError(402, `Your ${plan.name} plan includes ${plan.limits.users} team members.`, 'plan_limit');
+    const seats = countSeats(ctx.business.id);
+    if (seats >= plan.limits.users) {
+      const pending = seats - countMembers(ctx.business.id);
+      throw new HttpError(
+        402,
+        pending > 0
+          ? `Your ${plan.name} plan includes ${plan.limits.users} team members and ${pending} invitation(s) are still waiting to be accepted. Upgrade the plan or cancel a pending invitation first.`
+          : `Your ${plan.name} plan includes ${plan.limits.users} team members.`,
+        'plan_limit',
+      );
     }
 
     const existingUser = findUserByEmail(input.email);

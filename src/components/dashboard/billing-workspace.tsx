@@ -36,9 +36,24 @@ const METRIC_LABELS: Record<string, string> = {
   WHATSAPP_MESSAGES: 'WhatsApp messages',
 };
 
+/**
+ * Why a subscription is not in force, in the tenant's own words. The API decides entitlement;
+ * this only explains it, so an unpaid checkout or a lapsed period never reads as a mystery.
+ */
+const ENTITLEMENT_NOTICES: Record<string, string> = {
+  'status:INCOMPLETE':
+    'Payment for this plan has not completed, so it is not active yet. Your workspace is running on the free limits until the payment goes through.',
+  'status:UNPAID':
+    'The last invoice for this plan was not paid, so it is not active. Your workspace is running on the free limits.',
+  period_ended:
+    'The paid period for this plan has ended. Your workspace is running on the free limits until it renews.',
+};
+
 export function BillingWorkspace({
   plans,
   currentPlan,
+  subscribedPlanCode,
+  entitlement,
   subscription,
   usage,
   counts,
@@ -48,6 +63,8 @@ export function BillingWorkspace({
 }: {
   plans: Plan[];
   currentPlan: string;
+  subscribedPlanCode: string | null;
+  entitlement: { entitled: boolean; reason: string; accessUntil: string | null };
   subscription: Subscription;
   usage: { metric: string; quantity: number; limit: number }[];
   counts: { customers: number; users: number };
@@ -98,6 +115,11 @@ export function BillingWorkspace({
           <div className="rounded-xl border p-3">
             <p className="muted text-xs">Plan</p>
             <p className="text-sm font-semibold">{plans.find((plan) => plan.code === currentPlan)?.name ?? currentPlan}</p>
+            {subscribedPlanCode && subscribedPlanCode !== currentPlan ? (
+              <p className="muted text-xs">
+                Subscribed: {plans.find((plan) => plan.code === subscribedPlanCode)?.name ?? subscribedPlanCode} (not active)
+              </p>
+            ) : null}
           </div>
           <div className="rounded-xl border p-3">
             <p className="muted text-xs">Billing cycle</p>
@@ -110,6 +132,12 @@ export function BillingWorkspace({
             </p>
           </div>
         </div>
+        {!entitlement.entitled && subscription && subscription.plan_code !== currentPlan ? (
+          <Alert tone="warning" title={`${plans.find((plan) => plan.code === subscription.plan_code)?.name ?? subscription.plan_code} is not active`}>
+            {ENTITLEMENT_NOTICES[entitlement.reason] ??
+              'This subscription is not in force, so your workspace is metered against the free limits.'}
+          </Alert>
+        ) : null}
         {!payments.configured ? (
           <Alert tone="warning" title="Payment provider not configured">
             Add STRIPE_SECRET_KEY and STRIPE_PRICE_&lt;PLAN&gt;_&lt;CYCLE&gt; environment variables to take payments

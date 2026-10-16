@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function BillingPage() {
   const ctx = requireTenant(await getSessionContext());
-  const { plan, subscription } = planForBusiness(ctx.business.id);
+  const { plan, subscription, entitlement, subscribedPlanCode } = planForBusiness(ctx.business.id);
   const provider = process.env.PAYMENT_PROVIDER || 'manual';
 
   return (
@@ -32,6 +32,8 @@ export default async function BillingPage() {
           features: entry.features,
         }))}
         currentPlan={plan.code}
+        subscribedPlanCode={subscribedPlanCode}
+        entitlement={{ entitled: entitlement.entitled, reason: entitlement.reason, accessUntil: entitlement.accessUntil }}
         subscription={
           subscription
             ? {

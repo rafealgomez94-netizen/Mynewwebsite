@@ -40,6 +40,8 @@ const OWNER_PASSWORD = 'SmokeTest1!pass';
 const INVITEE_PASSWORD = 'SmokeInvite1!pass';
 const SLUG = `smoke-studio-${STAMP}`;
 const ISOLATION_EMAIL = `smoke-isolation-${STAMP}@example.test`;
+const SEAT_A_EMAIL = `smoke-seat-a-${STAMP}@example.test`;
+const SEAT_B_EMAIL = `smoke-seat-b-${STAMP}@example.test`;
 
 const results = [];
 const created = { businessIds: [], userIds: [] };
@@ -383,11 +385,11 @@ await check('onboarding creates the business workspace', async () => {
     type: 'salon',
     description: 'Automated verification tenant.',
     address: '1 Test Road',
-    city: 'Windhoek',
-    country: 'Namibia',
+    city: 'Monrovia',
+    country: 'Liberia',
     phone: '0810000000',
     email: `studio-${STAMP}@example.test`,
-    currency: 'NAD',
+    currency: 'LRD',
     hours: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].map((day) => ({
       day,
       open: '09:00',
@@ -1693,6 +1695,167 @@ await check('billing exposes plans, usage and accepts a plan change', async () =
   return 'BUSINESS → STARTER → BUSINESS';
 });
 
+await check('a plan only unlocks its limits while the subscription is in force', async () => {
+  // Stripe checkout writes the subscription row with status INCOMPLETE *before* the customer
+  // pays, and a lapsed row keeps its plan_code forever. Reading plan_code alone handed paid
+  // limits to tenants who never paid, so entitlement comes from the status plus the paid period.
+  const db = new DatabaseSync(dbFilePath());
+  // Resolve the tenant from the session instead of assuming one: the suite runs as its own
+  // signed-up owner, and hard-coding the demo slug silently mutated the wrong subscription.
+  const billing = await owner.get('/api/billing');
+  eq(billing.status, 200, 'GET /api/billing to locate the tenant');
+  const businessId = billing.json.data.subscription?.business_id;
+  assert(businessId, 'billing did not expose the subscription business id');
+  const business = { id: businessId };
+  const read = () =>
+    db.prepare('SELECT * FROM subscriptions WHERE business_id = ?').get(business.id);
+  const write = (patch) => {
+    const sets = Object.keys(patch).map((column) => `${column} = ?`);
+    db.prepare(`UPDATE subscriptions SET ${sets.join(', ')} WHERE business_id = ?`).run(
+      ...Object.values(patch),
+      business.id,
+    );
+  };
+  const original = read();
+  const future = new Date(Date.now() + 20 * 864e5).toISOString();
+  const past = new Date(Date.now() - 2 * 864e5).toISOString();
+  // Asserting the limits the API reports is what matters here: every route reads these, so a
+  // plan that is out of force must fall back to the free limits (the seat check below proves a
+  // real 402 from the same resolution).
+  const effectivePlan = async () => {
+    const res = await owner.get('/api/billing');
+    eq(res.status, 200, 'GET /api/billing during the entitlement check');
+    return { ...res.json.data.entitlement, limits: res.json.data.plan?.limits };
+  };
+
+  try {
+    // 1. An unpaid checkout that names BUSINESS must not unlock BUSINESS (60 users).
+    write({ plan_code: 'BUSINESS', status: 'INCOMPLETE', current_period_end: future });
+    const unpaid = await effectivePlan();
+    eq(unpaid.effectivePlanCode, 'FREE', 'an unpaid checkout must fall back to FREE');
+    eq(unpaid.reason, 'status:INCOMPLETE', 'reason for the unpaid checkout');
+    eq(unpaid.subscribedPlanCode, 'BUSINESS', 'the subscription still shows what was requested');
+    eq(unpaid.limits.users, 2, 'an unpaid plan must not hand out BUSINESS seats');
+
+    // 2. A paid period that ended without renewal.
+    write({ plan_code: 'STARTER', status: 'ACTIVE', current_period_end: past });
+    const lapsed = await effectivePlan();
+    eq(lapsed.effectivePlanCode, 'FREE', 'a lapsed period must fall back to FREE');
+    eq(lapsed.reason, 'period_ended', 'reason for the lapsed period');
+
+    // 3. Cancelled, but the period they already paid for is still open.
+    write({ plan_code: 'STARTER', status: 'CANCELED', cancel_at_period_end: 1, current_period_end: future });
+    const cancelled = await effectivePlan();
+    eq(cancelled.effectivePlanCode, 'STARTER', 'a cancelled plan keeps the period it paid for');
+    eq(cancelled.reason, 'canceled_but_period_open', 'reason for the cancelled plan');
+    eq(cancelled.limits.users, 5, 'a cancelled plan keeps the period it paid for');
+
+    // 4. Failed renewal inside the paid period is a grace period, not a cliff.
+    write({ plan_code: 'STARTER', status: 'PAST_DUE', cancel_at_period_end: 0, current_period_end: future });
+    const overdue = await effectivePlan();
+    eq(overdue.effectivePlanCode, 'STARTER', 'a failed renewal inside the paid period keeps access');
+    eq(overdue.reason, 'past_due_within_period', 'reason for the failed renewal');
+    eq(overdue.limits.users, 5, 'a paid period keeps the plan seats it was paid for');
+    return 'INCOMPLETE → FREE, lapsed → FREE, cancelled/PAST_DUE keep the paid period';
+  } finally {
+    write({
+      plan_code: original.plan_code,
+      status: original.status,
+      cancel_at_period_end: original.cancel_at_period_end,
+      current_period_start: original.current_period_start,
+      current_period_end: original.current_period_end,
+    });
+    db.close();
+  }
+});
+
+await check('pending invitations hold a seat and acceptance obeys the plan', async () => {
+  // Seat limits used to count active members only, so a FREE workspace (2 seats) could send any
+  // number of invitations — the count never moved while they were pending — and then activate
+  // every one of them on acceptance. Seats are now reserved when an invitation is sent and
+  // re-checked when it is accepted.
+  const db = new DatabaseSync(dbFilePath());
+  const billing = await owner.get('/api/billing');
+  const businessId = billing.json.data.subscription?.business_id;
+  assert(businessId, 'no tenant for the seat check');
+  const original = db.prepare('SELECT * FROM subscriptions WHERE business_id = ?').get(businessId);
+  const write = (patch) => {
+    const sets = Object.keys(patch).map((column) => `${column} = ?`);
+    db.prepare(`UPDATE subscriptions SET ${sets.join(', ')} WHERE business_id = ?`).run(
+      ...Object.values(patch),
+      businessId,
+    );
+  };
+  const future = new Date(Date.now() + 20 * 864e5).toISOString();
+  const team = () => owner.get('/api/team');
+  const remove = async (email) => {
+    const list = await team();
+    const member = (list.json.data.members ?? []).find((entry) => entry.email === email);
+    if (member) await owner.del('/api/team', { userId: member.user_id });
+  };
+
+  try {
+    // 1. The seat is held by the invitation itself.
+    write({ plan_code: 'FREE', status: 'ACTIVE', current_period_end: future });
+    const free = await team();
+    eq(free.json.data.limits.users, 2, 'seats on the free plan');
+    const beforeUsed = free.json.data.limits.used;
+    eq(free.json.data.limits.active, 1, 'the suite tenant should have exactly one active member here');
+    const held = await owner.post('/api/team', { action: 'invite', email: SEAT_A_EMAIL, name: 'Seat A', role: 'STAFF' });
+    eq(held.status, 201, 'inviting into a free seat');
+    const afterHeld = await team();
+    eq(afterHeld.json.data.limits.used, beforeUsed + 1, 'the pending invitation holds a seat');
+    assert(
+      afterHeld.json.data.limits.active < afterHeld.json.data.limits.used,
+      'the pending seat should not count as an active member yet',
+    );
+
+    const overflow = await owner.post('/api/team', { action: 'invite', email: SEAT_B_EMAIL, name: 'Seat B', role: 'STAFF' });
+    eq(overflow.status, 402, 'inviting past the seats held by pending invitations');
+    eq(overflow.json.error.code, 'plan_limit', 'error code for the overflow');
+    assert(
+      /invitation/i.test(overflow.json.error.message ?? ''),
+      `the refusal should mention the pending invitation: ${overflow.json.error.message}`,
+    );
+
+    // 2. A link that was issued while a seat was free stays usable after the plan shrinks,
+    //    and stops at the plan limit instead of silently over-filling the workspace.
+    const paidHeld = await owner.post('/api/team', { action: 'invite', email: SEAT_B_EMAIL, name: 'Seat B', role: 'STAFF' });
+    eq(paidHeld.status, 402, 'still refused while the free plan is full');
+    write({ plan_code: 'PROFESSIONAL', status: 'ACTIVE', current_period_end: future });
+    const wide = await owner.post('/api/team', { action: 'invite', email: SEAT_B_EMAIL, name: 'Seat B', role: 'STAFF' });
+    eq(wide.status, 201, 'inviting while the plan has room');
+    const tokenB = wide.json.data.invitationToken;
+    assert(tokenB, 'no invitation token for seat B');
+
+    write({ plan_code: 'FREE', status: 'ACTIVE', current_period_end: future });
+    const seatA = new Session('seat-a');
+    const acceptedA = await authCall('POST', seatA, '/api/auth/accept-invite', { token: held.json.data.invitationToken, password: 'SeatAccept1!pass', name: 'Seat A' });
+    eq(acceptedA.status, 200, 'accepting the invitation that holds the second seat');
+
+    const seatB = new Session('seat-b');
+    const refusedB = await authCall('POST', seatB, '/api/auth/accept-invite', { token: tokenB, password: 'SeatAccept1!pass', name: 'Seat B' });
+    eq(refusedB.status, 402, 'accepting past the seats the plan includes');
+    eq(refusedB.json.error.code, 'plan_limit', 'error code when the plan is full');
+
+    write({ plan_code: original.plan_code, status: original.status, current_period_end: original.current_period_end });
+    const retried = await authCall('POST', seatB, '/api/auth/accept-invite', { token: tokenB, password: 'SeatAccept1!pass', name: 'Seat B' });
+    eq(retried.status, 200, 'the same link works once the plan has room again');
+    return 'seat reserved on invite, honoured on accept, refusal leaves the link usable';
+  } finally {
+    await remove(SEAT_A_EMAIL);
+    await remove(SEAT_B_EMAIL);
+    write({
+      plan_code: original.plan_code,
+      status: original.status,
+      cancel_at_period_end: original.cancel_at_period_end,
+      current_period_start: original.current_period_start,
+      current_period_end: original.current_period_end,
+    });
+    db.close();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 14. Team, roles and invitations
 // ---------------------------------------------------------------------------
@@ -1764,7 +1927,7 @@ await check('owners can change roles and remove members', async () => {
 // 15. Account settings and password change
 // ---------------------------------------------------------------------------
 await check('profile can be updated', async () => {
-  const res = await owner.patch('/api/account/profile', { name: 'Smoke Owner Renamed', jobTitle: 'Owner', timezone: 'Africa/Windhoek', theme: 'dark' });
+  const res = await owner.patch('/api/account/profile', { name: 'Smoke Owner Renamed', jobTitle: 'Owner', timezone: 'Africa/Monrovia', theme: 'dark' });
   eq(res.status, 200, 'profile update');
   const profile = await owner.get('/api/account/profile');
   eq(profile.status, 200, 'profile read');
@@ -1838,7 +2001,7 @@ await check('a user with two workspaces switches between them safely', async () 
 await check('a second tenant cannot read the first tenant’s records', async () => {
   const signup = await signUp(second, { name: 'Second Owner', email: SECOND_EMAIL, password: OWNER_PASSWORD, acceptTerms: true });
   eq(signup.status, 201, 'second signup');
-  const business = await second.post('/api/business/profile', { name: `Smoke Second ${STAMP}`, type: 'retail', currency: 'NAD', onboardingStep: 2 });
+  const business = await second.post('/api/business/profile', { name: `Smoke Second ${STAMP}`, type: 'retail', currency: 'LRD', onboardingStep: 2 });
   eq(business.status, 201, 'second business');
   const secondBusinessId = (business.json.data.businesses ?? []).find((entry) => entry.name?.startsWith('Smoke Second'))?.id;
   if (secondBusinessId) created.businessIds.push(secondBusinessId);
@@ -1927,7 +2090,7 @@ await check('public marketing pages render', async () => {
     assert(html.includes('wa.me'), `${page} has no WhatsApp contact link`);
     assert(html.includes(managerNumber.slice(-7)), `${page} does not link the manager's WhatsApp number`);
   }
-  const support = (await anon.get('/support/windhoek-beauty-studio')).text;
+  const support = (await anon.get('/support/monrovia-beauty-studio')).text;
   assert(support.includes('manager.jpg'), 'the public tenant support page has no manager photo');
   return '5 pages, hero + CTAs + WhatsApp widget + manager card';
 });
@@ -1994,7 +2157,7 @@ async function cleanup() {
     .map((row) => row.name);
   const columnsOf = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
 
-  const emails = [OWNER_EMAIL, INVITEE_EMAIL, SECOND_EMAIL, `smoke-join-${STAMP}@example.test`];
+  const emails = [OWNER_EMAIL, INVITEE_EMAIL, SECOND_EMAIL, `smoke-join-${STAMP}@example.test`, SEAT_A_EMAIL, SEAT_B_EMAIL];
   const userIds = emails
     .map((email) => db.prepare('SELECT id FROM users WHERE email = ?').get(email)?.id)
     .filter(Boolean);

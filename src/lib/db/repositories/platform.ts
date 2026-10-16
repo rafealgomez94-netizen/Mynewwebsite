@@ -209,6 +209,13 @@ export function listPlans(): Plan[] {
   }));
 }
 
+/**
+ * Currency a workspace starts in when the client does not choose one. The platform is built for
+ * Liberia and West Africa, so Liberian dollars are the default; set DEFAULT_CURRENCY to change it
+ * for another market (for example GHS or NGN) without touching code.
+ */
+export const DEFAULT_CURRENCY = (process.env.DEFAULT_CURRENCY || 'LRD').toUpperCase();
+
 export function findPlan(code: string): Plan | undefined {
   return listPlans().find((plan) => plan.code === code);
 }
@@ -291,10 +298,102 @@ export function updateSubscription(businessId: string, patch: Record<string, unk
   run(`UPDATE subscriptions SET ${sets.join(', ')} WHERE business_id = ?`, params);
 }
 
-export function planForBusiness(businessId: string): { plan: Plan; subscription?: SubscriptionRow } {
+/**
+ * A subscription only unlocks the plan it names while it is actually in force.
+ *
+ * Stripe checkout writes the row with status INCOMPLETE *before* the customer pays, and a
+ * subscription that lapsed or was cancelled keeps its plan_code forever. Reading plan_code
+ * alone therefore handed paid limits to people who never paid, so entitlement is decided from
+ * the status plus the paid period instead:
+ *
+ *   ACTIVE            — in force until current_period_end
+ *   TRIALING          — in force until the later of current_period_end / trial_ends_at
+ *   PAST_DUE          — a real paid relationship with a failed renewal: keep access while the
+ *                       period they paid for is still open, then fall back to FREE
+ *   CANCELED          — keeps the plan until current_period_end (cancel_at_period_end semantics)
+ *   anything else     — INCOMPLETE, UNPAID, EXPIRED, unknown: FREE
+ */
+const STATUSES_THAT_KEEP_THE_PLAN = new Set(['ACTIVE', 'TRIALING', 'PAST_DUE', 'CANCELED']);
+
+export type Entitlement = {
+  /** Whether the plan named by the subscription is currently in force. */
+  entitled: boolean;
+  /** Machine-readable why, surfaced in billing responses and logs. */
+  reason: string;
+  /** The plan the tenant is actually metered against. */
+  planCode: string;
+  /** When access to a paid plan ends, if a period is known. */
+  accessUntil: string | null;
+};
+
+export function subscriptionEntitlement(
+  subscription: SubscriptionRow | undefined,
+  now = new Date(),
+): Entitlement {
+  if (!subscription) {
+    return { entitled: false, reason: 'no_subscription', planCode: 'FREE', accessUntil: null };
+  }
+  const code = subscription.plan_code;
+  if (code === 'FREE') {
+    return { entitled: false, reason: 'free_plan', planCode: 'FREE', accessUntil: null };
+  }
+  if (!STATUSES_THAT_KEEP_THE_PLAN.has(subscription.status)) {
+    return {
+      entitled: false,
+      reason: `status:${subscription.status}`,
+      planCode: 'FREE',
+      accessUntil: null,
+    };
+  }
+
+  const candidates: string[] = [];
+  if (subscription.current_period_end) candidates.push(subscription.current_period_end);
+  if (subscription.status === 'TRIALING' && subscription.trial_ends_at) {
+    candidates.push(subscription.trial_ends_at);
+  }
+  const accessUntil = candidates.sort().at(-1) ?? null;
+  if (!accessUntil) {
+    // No period recorded (a provider-managed row mid-webhook): trust an ACTIVE status.
+    const entitled = subscription.status === 'ACTIVE';
+    return {
+      entitled,
+      reason: entitled ? 'active_without_period' : 'missing_period',
+      planCode: entitled ? code : 'FREE',
+      accessUntil: null,
+    };
+  }
+  if (new Date(accessUntil).getTime() <= now.getTime()) {
+    return { entitled: false, reason: 'period_ended', planCode: 'FREE', accessUntil };
+  }
+  const reason =
+    subscription.status === 'PAST_DUE'
+      ? 'past_due_within_period'
+      : subscription.status === 'CANCELED'
+        ? 'canceled_but_period_open'
+        : subscription.status.toLowerCase();
+  return { entitled: true, reason, planCode: code, accessUntil };
+}
+
+/**
+ * The plan a tenant is metered against, plus what it is paying for. When a subscription is not
+ * in force `plan` is FREE while `subscribedPlanCode` still shows what the row claims, so callers
+ * can explain the difference instead of silently showing paid limits the tenant does not have.
+ */
+export function planForBusiness(businessId: string): {
+  plan: Plan;
+  subscription?: SubscriptionRow;
+  entitlement: Entitlement;
+  subscribedPlanCode: string | null;
+} {
   const subscription = getSubscription(businessId);
-  const plan = findPlan(subscription?.plan_code ?? 'FREE') ?? findPlan('FREE')!;
-  return { plan, subscription };
+  const entitlement = subscriptionEntitlement(subscription);
+  const plan = findPlan(entitlement.planCode) ?? findPlan('FREE')!;
+  return {
+    plan,
+    subscription,
+    entitlement,
+    subscribedPlanCode: subscription?.plan_code ?? null,
+  };
 }
 
 export function subscriptionStats() {

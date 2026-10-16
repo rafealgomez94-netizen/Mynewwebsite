@@ -1,4 +1,5 @@
 import { all, get, json, nowIso, run, scalar, toJson } from '@/lib/db';
+import { DEFAULT_CURRENCY } from '@/lib/db/repositories/platform';
 import { newId, slugify } from '@/lib/utils';
 import type { BusinessRole, PlatformRole } from '@/lib/domain';
 
@@ -427,7 +428,7 @@ export function createBusiness(input: {
       input.email ?? null,
       input.website ?? null,
       input.timezone ?? 'UTC',
-      input.currency ?? 'USD',
+      input.currency ?? DEFAULT_CURRENCY,
       toJson(input.hours ?? DEFAULT_HOURS),
       toJson({ ...DEFAULT_COMMS, ...(input.comms ?? {}) }),
       input.ownerId,
@@ -647,6 +648,19 @@ export function listPendingInvitations(userId: string) {
 export function countMembers(businessId: string): number {
   return scalar<number>(
     `SELECT count(*) AS c FROM business_members WHERE business_id = ? AND status = 'ACTIVE'`,
+    [businessId],
+  );
+}
+
+/**
+ * Seats a tenant has committed to: active members plus invitations that were sent and not yet
+ * accepted. Counting only active members let a FREE workspace (2 seats) send unlimited
+ * invitations — the count never moved while they were pending — and then activate all of them,
+ * so the plan limit was bypassable in two steps.
+ */
+export function countSeats(businessId: string): number {
+  return scalar<number>(
+    `SELECT count(*) AS c FROM business_members WHERE business_id = ? AND status IN ('ACTIVE', 'INVITED')`,
     [businessId],
   );
 }

@@ -2,9 +2,15 @@ import { assertRateLimit, fail, handleError, ok, parseBody } from '@/lib/api/htt
 import { acceptInviteSchema } from '@/lib/validation';
 import { consumeAuthTokenFor, peekAuthToken, startSession } from '@/lib/auth/session';
 import { hashPassword } from '@/lib/auth/password';
-import { findUserById, listPendingInvitations, updateMember, updateUser } from '@/lib/db/repositories/accounts';
+import {
+  countMembers,
+  findUserById,
+  listPendingInvitations,
+  updateMember,
+  updateUser,
+} from '@/lib/db/repositories/accounts';
 import { audit } from '@/lib/services/notify';
-import { incrementUsage } from '@/lib/db/repositories/platform';
+import { incrementUsage, planForBusiness } from '@/lib/db/repositories/platform';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,6 +63,24 @@ export async function POST(request: Request) {
   try {
     assertRateLimit(request, 'accept-invite', 10, 15 * 60 * 1000);
     const input = await parseBody(request, acceptInviteSchema);
+
+    // Seat check before the token is consumed: activating a membership must not exceed the
+    // workspace's plan. Refusing after consumption would burn the invite link, so peek first —
+    // the invitation stays usable and the invitee can accept once a seat is free again.
+    const peek = await peekAuthToken(input.token, 'INVITE');
+    if (peek.ok && peek.userId) {
+      for (const invitation of listPendingInvitations(peek.userId)) {
+        const { plan } = planForBusiness(invitation.business_id);
+        if (countMembers(invitation.business_id) >= plan.limits.users) {
+          return fail(
+            402,
+            `${invitation.business_name} has no free seat on its ${plan.name} plan (${plan.limits.users} included). ` +
+              'Ask the workspace owner to free a seat or upgrade, then use the same invitation link.',
+            'plan_limit',
+          );
+        }
+      }
+    }
 
     const result = await consumeAuthTokenFor(input.token, 'INVITE');
     if (!result.ok || !result.userId) {

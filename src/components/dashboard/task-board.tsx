@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { BellRing } from 'lucide-react';
 import { Badge, Button, Card, Field, Input, Modal, Select, StatusBadge, Textarea, apiRequest, useToast } from '@/components/ui';
 import { TASK_PRIORITIES, TASK_STATUSES } from '@/lib/domain';
 import { formatDate } from '@/lib/utils';
@@ -32,6 +33,7 @@ export function TaskBoard({
   const [tasks, setTasks] = useState(initial);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [alerting, setAlerting] = useState(false);
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -45,6 +47,27 @@ export function TaskBoard({
     const result = await apiRequest<{ tasks: TaskItem[] }>('/api/tasks', { method: 'GET' });
     if (result.ok) setTasks(result.data.tasks ?? []);
     router.refresh();
+  };
+
+  /**
+   * Announces the deadlines that have arrived. The API stamps each task, so the
+   * button is safe to press twice — the team hears about a deadline once.
+   */
+  const sendDeadlineAlerts = async () => {
+    setAlerting(true);
+    const result = await apiRequest<{ due: number; alerted: number; overdue: number }>('/api/tasks/deadline-alerts', { method: 'POST' });
+    setAlerting(false);
+    if (!result.ok) {
+      push(result.error, 'danger');
+      return;
+    }
+    const { alerted, due, overdue } = result.data;
+    if (alerted === 0) {
+      push(due === 0 ? 'No deadlines are due right now.' : 'Nothing new to announce.', 'info');
+      return;
+    }
+    push(`${alerted} deadline alert${alerted === 1 ? '' : 's'} sent${overdue ? ` · ${overdue} overdue` : ''}`, 'success');
+    await reload();
   };
 
   const create = async (payload: typeof form) => {
@@ -99,7 +122,12 @@ export function TaskBoard({
             </Badge>
           ))}
         </div>
-        <Button onClick={() => setOpen(true)}>+ New task</Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="secondary" onClick={sendDeadlineAlerts} loading={alerting}>
+            <BellRing className="h-4 w-4" /> Send deadline alerts
+          </Button>
+          <Button onClick={() => setOpen(true)}>+ New task</Button>
+        </div>
       </div>
 
       {suggestions.length ? (

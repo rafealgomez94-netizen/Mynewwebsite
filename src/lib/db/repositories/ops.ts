@@ -238,6 +238,7 @@ export type TaskRowLocal = {
   related_id: string | null;
   source: string;
   completed_at: string | null;
+  deadline_alerted_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -268,6 +269,56 @@ export function listTasks(
               CASE WHEN t.due_at IS NULL THEN 1 ELSE 0 END, t.due_at ASC
      LIMIT ?`,
     [...params, Math.min(Math.max(filter.limit ?? 200, 1), 500)],
+  );
+}
+
+/**
+ * Open tasks whose deadline has arrived (or is about to) and that have not been
+ * announced yet. Kept separate from `listTasks` so the alert job can use the index
+ * on `(business_id, due_at)` instead of loading every task in the workspace.
+ */
+export function tasksNeedingDeadlineAlert(
+  businessId: string,
+  window: { dueBeforeIso: string; limit?: number },
+): TaskRowLocal[] {
+  return all<TaskRowLocal>(
+    `SELECT t.*, u.name AS assignee_name
+     FROM tasks t LEFT JOIN users u ON u.id = t.assignee_user_id
+     WHERE t.business_id = ?
+       AND t.status <> 'COMPLETED'
+       AND t.due_at IS NOT NULL AND t.due_at <= ?
+       AND t.deadline_alerted_at IS NULL
+     ORDER BY t.due_at ASC
+     LIMIT ?`,
+    [businessId, window.dueBeforeIso, Math.min(Math.max(window.limit ?? 200, 1), 500)],
+  );
+}
+
+/** Stamps a task so the deadline job never announces the same deadline twice. */
+export function markDeadlineAlerted(businessId: string, taskId: string): void {
+  run('UPDATE tasks SET deadline_alerted_at = ?, updated_at = ? WHERE business_id = ? AND id = ?', [
+    nowIso(),
+    nowIso(),
+    businessId,
+    taskId,
+  ]);
+}
+
+/** Clears the stamp when a task's deadline moves, so the new deadline is announced. */
+export function clearDeadlineAlert(businessId: string, taskId: string): void {
+  run('UPDATE tasks SET deadline_alerted_at = NULL, updated_at = ? WHERE business_id = ? AND id = ?', [
+    nowIso(),
+    businessId,
+    taskId,
+  ]);
+}
+
+export function findTask(businessId: string, id: string): TaskRowLocal | undefined {
+  return get<TaskRowLocal>(
+    `SELECT t.*, u.name AS assignee_name
+     FROM tasks t LEFT JOIN users u ON u.id = t.assignee_user_id
+     WHERE t.business_id = ? AND t.id = ?`,
+    [businessId, id],
   );
 }
 

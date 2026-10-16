@@ -313,6 +313,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   source        TEXT NOT NULL DEFAULT 'MANUAL',    -- MANUAL | AI_RECOMMENDATION
   created_by_id TEXT REFERENCES users(id),
   completed_at  TEXT,
+  deadline_alerted_at TEXT,               -- set when a TASK_DUE notification went out
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );

@@ -70,9 +70,36 @@ function ensureSchema(db: DatabaseSync): void {
   const check = db.prepare(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'businesses'`,
   ).get();
-  if (check) return;
+  if (check) {
+    ensureColumns(db);
+    return;
+  }
   const ddl = fs.readFileSync(schemaPath(), 'utf8');
   db.exec(ddl);
+}
+
+/**
+ * Columns added after the first release.
+ *
+ * `CREATE TABLE IF NOT EXISTS` in `db/schema.sqlite.sql` only builds fresh databases,
+ * so columns introduced later are added here. Each entry is idempotent: it is skipped
+ * as soon as the column exists, which is why this is safe to run on every connect.
+ * PostgreSQL deployments get the same column from `db/schema.postgres.sql`.
+ */
+const ADDED_COLUMNS: { table: string; column: string; ddl: string }[] = [
+  {
+    table: 'tasks',
+    column: 'deadline_alerted_at',
+    ddl: `ALTER TABLE tasks ADD COLUMN deadline_alerted_at TEXT`,
+  },
+];
+
+function ensureColumns(db: DatabaseSync): void {
+  for (const entry of ADDED_COLUMNS) {
+    const columns = db.prepare(`PRAGMA table_info(${entry.table})`).all() as { name: string }[];
+    if (columns.some((column) => column.name === entry.column)) continue;
+    db.exec(entry.ddl);
+  }
 }
 
 /**

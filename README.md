@@ -32,7 +32,7 @@ A floating WhatsApp widget is present on every public page (number from `NEXT_PU
 | Customer detail | `/dashboard/customers/[id]` | Full history, orders, appointments, conversations, edit |
 | Sales & pipeline | `/dashboard/sales` | Leads, AI qualification, scoring, follow-up reminders, New Lead → Contacted → Qualified → Proposal → Negotiation → Won/Lost |
 | Appointments | `/dashboard/appointments` | Calendar, staff availability, booking, confirmation, rescheduling into a real free slot (double-booking refused with `409`), cancellation, and reminders the business controls — the dashboard sends the due ones on demand and `/api/cron/reminders` does it on a schedule |
-| Tasks | `/dashboard/tasks` | To Do / In Progress / Completed, priorities, deadlines, assignment, AI-suggested tasks |
+| Tasks | `/dashboard/tasks` | To Do / In Progress / Completed, priorities, deadlines, assignment, AI-suggested tasks, and `TASK_DUE` notifications for deadlines that have arrived (`WARNING`) or passed (`CRITICAL`) |
 | Orders | `/dashboard/orders` | Order creation from services and products, payment status, channels |
 | Inventory | `/dashboard/inventory` | SKU, quantity, cost, selling price, supplier, minimum stock, automatic low-stock detection, stock movements, fast/slow movers |
 | Customer support | `/dashboard/support` | Conversations, AI replies, escalation queue, tickets, support widget settings |
@@ -146,7 +146,7 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, RBAC and tenant isolation — **87 checks in total**. It creates its own
+billing, invitations, RBAC and tenant isolation — **89 checks in total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -212,7 +212,7 @@ Everything is documented in `.env.example`. The important ones:
 | `STORAGE_DRIVER`, `STORAGE_LOCAL_DIR`, `STORAGE_S3_*` | Knowledge-base document storage |
 | `PAYMENT_PROVIDER`, `PAYMENT_SECRET`, `STRIPE_*` | Billing. `manual` (default) applies a plan change immediately; `stripe` uses configured price IDs. No keys are ever hard-coded |
 | `NEXT_PUBLIC_SUPPORT_*` | Public contact details (email, phone, WhatsApp) shown in the footer, manager card and floating WhatsApp widget. `NEXT_PUBLIC_SUPPORT_DIAL_CODE` converts a nationally written WhatsApp number (`077…`) into international form (`wa.me/264774075285`) |
-| `CRON_SECRET` | Guards `GET\|POST /api/cron/reminders`, the scheduler entry point for appointment reminders (`openssl rand -hex 32`). Empty ⇒ the platform-wide run answers `503`; per-workspace sending is unaffected |
+| `CRON_SECRET` | Guards the scheduler endpoints — `GET\|POST /api/cron/reminders` (appointment reminders) and `GET\|POST /api/cron/run` (reminders + task deadline alerts) — via a `?secret=` parameter or an `Authorization: Bearer` header (`openssl rand -hex 32`). Empty ⇒ they answer `503`; the per-workspace dashboard buttons are unaffected |
 | `SEED_*` | Emails/passwords created by `npm run db:seed` |
 
 Secrets are read on the server only. Nothing in `src/components` or any client bundle touches `process.env` values other than `NEXT_PUBLIC_*`.
@@ -286,7 +286,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **87 / 87 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **89 / 89 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -396,6 +396,33 @@ header). Note that a platform-wide cron run sends any due reminders for every te
 the demo tenant — in development those messages go to the server console.
 
 
+### Tasks: deadline alerts, and what a partial update may not touch
+
+The notification types the schema documents include `TASK_DUE`, but nothing ever created one: a
+deadline could pass without the team being told. `src/lib/services/deadlines.ts` now announces the
+open tasks whose deadline has arrived or is inside the next 24 hours — `WARNING` while there is
+still time, `CRITICAL` once it is late — and stamps `tasks.deadline_alerted_at` so the dashboard
+button, the cron route and any scheduled run together produce exactly one notification per
+deadline. A new deadline (or reopening a completed task) clears the stamp, so it is announced in
+turn.
+
+That stamp is the first column added after the initial release, so the database layer grew a small
+idempotent migration step (`ADDED_COLUMNS` in `src/lib/db/index.ts`): `CREATE TABLE IF NOT EXISTS`
+only builds fresh databases, and a running install must not need a manual `ALTER TABLE`. The
+column is in `db/schema.sqlite.sql` and `db/schema.postgres.sql` for new databases, and
+`PATCH /api/tasks` clears it when the deadline moves.
+
+- `PATCH /api/tasks` also treated an omitted assignee as "unassign me", so changing a task's
+  status silently took it away from whoever owned it. An omitted field now means "leave it alone"
+  and an explicit `""` unassigns, matching the dropdown. Covered by a smoke check that changes the
+  status of an assigned task and asserts the assignee and deadline both survive.
+
+Verified over HTTP: three tasks (due soon, overdue, already completed) produce two alerts — the
+completed one is ignored and the late one is raised as `CRITICAL` — a second run reports `due: 0`,
+moving a deadline makes it due again, and the combined scheduler `/api/cron/run` runs both jobs
+idempotently behind the same secret.
+
+
 ---
 
 ## 11. Deployment
@@ -405,11 +432,12 @@ the demo tenant — in development those messages go to the server console.
 3. `npm ci && npm run build && npm start` (or deploy the same commands to a Node 22 host; the app binds `0.0.0.0:3000`).
 4. Run `npm run db:seed` only if you want the demo data; in production create the first account through `/signup` and promote your platform administrator in SQL:
    `UPDATE users SET platform_role = 'PLATFORM_ADMIN' WHERE email = 'you@example.com';`
-5. Set `CRON_SECRET` and point a scheduler at the reminder endpoint every 15–60 minutes —
-   Vercel Cron (`"crons": [{ "path": "/api/cron/reminders?secret=…", "schedule": "*/30 * * * *" }]`),
-   a systemd timer, GitHub Actions or any uptime monitor. The route is idempotent, so overlapping
-   runs are harmless; without a scheduler the dashboard's "Send due reminders" button still works
-   per workspace.
+5. Set `CRON_SECRET` and point a scheduler at `/api/cron/run` every 15–60 minutes — Vercel Cron
+   (`"crons": [{ "path": "/api/cron/run?secret=…", "schedule": "*/30 * * * *" }]`), a systemd timer,
+   GitHub Actions or any uptime monitor. That one call sends the appointment reminders that are due
+   and announces the task deadlines that have arrived, for every workspace; `/api/cron/reminders`
+   does the reminders alone. Both are idempotent, so overlapping runs are harmless, and without a
+   scheduler the dashboard's per-workspace buttons still work.
 6. Replace `public/manager.jpg` with your own photo.
 
 ---

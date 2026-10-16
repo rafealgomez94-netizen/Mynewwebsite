@@ -910,7 +910,16 @@ await check('the reminder scheduler endpoint is secret-protected', async () => {
   const bearer = await anon.post('/api/cron/reminders', {}, { headers: { authorization: `Bearer ${secret}` } });
   eq(bearer.status, 200, 'scheduled run with a bearer header');
   eq(bearer.json.data.sent, 0, 'the scheduler is idempotent');
-  return `401 without the secret; runs twice, ${run.json.data.sent} then 0 sent`;
+
+  // The combined job runs the reminders and the task deadline alerts together.
+  eq((await anon.get('/api/cron/run?secret=wrong')).status, 401, 'the combined job is protected too');
+  const combined = await anon.get(`/api/cron/run?secret=${secret}`);
+  eq(combined.status, 200, 'combined scheduled run');
+  assert(combined.json.data.reminders, 'the combined run did not report reminders');
+  assert(combined.json.data.deadlines, 'the combined run did not report deadlines');
+  assert(typeof combined.json.data.deadlines.alerted === 'number', 'no deadline count in the combined run');
+  eq((await anon.get(`/api/cron/run?secret=${secret}`)).json.data.deadlines.alerted, 0, 'the combined job is idempotent');
+  return `401 without the secret; reminders ${run.json.data.sent} then 0; combined job runs both`;
 });
 
 await check('public booking creates an appointment and a customer record', async () => {
@@ -956,6 +965,106 @@ await check('task is created, progressed and completed', async () => {
   const done = await owner.patch('/api/tasks', { id: taskId, status: 'COMPLETED' });
   eq(done.status, 200, 'complete');
   return 'TODO → IN_PROGRESS → COMPLETED';
+});
+
+await check('a partial task update keeps the rest of the task', async () => {
+  const me = await owner.get('/api/account/profile');
+  const ownerUserId = me.json.data.user?.id;
+  assert(ownerUserId, 'could not read the signed-in user id');
+
+  const created_ = await owner.post('/api/tasks', {
+    title: 'Smoke task with an owner',
+    status: 'TODO',
+    priority: 'MEDIUM',
+    assigneeUserId: ownerUserId,
+    dueAt: new Date(Date.now() + 3 * 86400000).toISOString(),
+  });
+  eq(created_.status, 201, 'POST /api/tasks with an assignee');
+  const id = created_.json.data.id;
+
+  const readTask = async () => {
+    const list = await owner.get('/api/tasks?limit=200');
+    const task = (list.json.data.tasks ?? []).find((row) => row.id === id);
+    assert(task, 'the task disappeared from the list');
+    return task;
+  };
+
+  const before = await readTask();
+  eq(before.assignee_user_id, ownerUserId, 'assignee after create');
+  assert(before.due_at, 'due date after create');
+
+  // Changing the status must not quietly unassign the task or drop its deadline:
+  // an omitted field in a PATCH means "leave it alone", not "clear it".
+  const status = await owner.patch('/api/tasks', { id, status: 'IN_PROGRESS' });
+  eq(status.status, 200, 'status update');
+  const afterStatus = await readTask();
+  eq(afterStatus.assignee_user_id, ownerUserId, 'assignee survived a status change');
+  eq(afterStatus.due_at, before.due_at, 'deadline survived a status change');
+
+  // An explicit empty value does unassign, as the dropdown's "Unassigned" option sends.
+  const cleared = await owner.patch('/api/tasks', { id, assigneeUserId: '' });
+  eq(cleared.status, 200, 'unassign');
+  eq((await readTask()).assignee_user_id, null, 'the task can still be unassigned on purpose');
+
+  const ghost = await owner.patch('/api/tasks', { id: 'task_smoke_missing', status: 'TODO' });
+  eq(ghost.status, 404, 'unknown task');
+  eq(ghost.json?.error?.code, 'not_found', 'not found code');
+
+  await owner.del('/api/tasks', { id });
+  return 'status change kept the assignee and deadline; unassigning still works';
+});
+
+await check('task deadlines are announced once', async () => {
+  const soon = new Date(Date.now() + 6 * 3600000).toISOString();
+  const late = new Date(Date.now() - 2 * 3600000).toISOString();
+  const finished = new Date(Date.now() + 4 * 3600000).toISOString();
+  const ids = [];
+  for (const task of [
+    { title: 'Smoke deadline soon', status: 'TODO', priority: 'HIGH', dueAt: soon },
+    { title: 'Smoke deadline overdue', status: 'IN_PROGRESS', priority: 'URGENT', dueAt: late },
+    { title: 'Smoke deadline finished', status: 'COMPLETED', priority: 'LOW', dueAt: finished },
+  ]) {
+    const res = await owner.post('/api/tasks', task);
+    eq(res.status, 201, `POST ${task.title}`);
+    ids.push(res.json.data.id);
+  }
+
+  const preview = await owner.get('/api/tasks/deadline-alerts');
+  eq(preview.status, 200, 'deadline preview');
+  assert(preview.json.data.due >= 2, `expected at least two deadlines due, got ${preview.json.data.due}`);
+
+  const first = await owner.post('/api/tasks/deadline-alerts', {});
+  eq(first.status, 200, 'announcing deadlines');
+  assert(first.json.data.alerted >= 2, `expected at least two alerts, got ${first.json.data.alerted}`);
+  assert(first.json.data.overdue >= 1, 'the overdue task was not flagged');
+  assert(
+    !first.json.data.alerts.some((alert) => alert.title === 'Smoke deadline finished'),
+    'a completed task must not be announced',
+  );
+
+  const second = await owner.post('/api/tasks/deadline-alerts', {});
+  eq(second.json.data.due, 0, 'nothing is due after the first run');
+  eq(second.json.data.alerted, 0, 'a second run must not tell the team twice');
+
+  const notifications = await owner.get('/api/notifications');
+  const due = (notifications.json.data.items ?? []).filter((item) => item.type === 'TASK_DUE');
+  assert(due.length >= 2, `expected TASK_DUE notifications, found ${due.length}`);
+  assert(
+    due.some((item) => item.title.includes('Overdue') && item.level === 'CRITICAL'),
+    'an overdue deadline should be raised as CRITICAL',
+  );
+  assert(
+    !due.some((item) => item.title.includes('Smoke deadline finished')),
+    'a completed task produced a deadline alert',
+  );
+
+  // A new deadline for the same task is announced again.
+  const moved = await owner.patch('/api/tasks', { id: ids[0], dueAt: new Date(Date.now() + 8 * 3600000).toISOString() });
+  eq(moved.status, 200, 'moving the deadline');
+  const again = await owner.get('/api/tasks/deadline-alerts');
+  assert(again.json.data.due >= 1, 'a moved deadline must be due for an alert again');
+
+  return `due ${first.json.data.due} → alerted ${first.json.data.alerted} (${first.json.data.overdue} overdue) → second run 0`;
 });
 
 await check('notifications are produced and can be marked read', async () => {

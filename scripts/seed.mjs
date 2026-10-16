@@ -71,65 +71,24 @@ const hash = (value) => bcrypt.hashSync(value, 12);
 const j = (value) => JSON.stringify(value);
 
 // ---------------------------------------------------------------------------
-// Plans — kept in sync with PLAN_CATALOGUE in src/lib/db/repositories/platform.ts
+// Plans — read from db/plans.json, the single source of truth shared with the app
 // ---------------------------------------------------------------------------
-const PLANS = [
-  {
-    id: 'plan_free',
-    code: 'FREE',
-    name: 'Free',
-    tagline: 'Get organised and try the AI assistant.',
-    month: 0,
-    year: 0,
-    sort: 1,
-    limits: { customers: 100, users: 2, aiMessages: 100, documents: 10, whatsappMessages: 200, storageMb: 50, appointments: 100, products: 50 },
-    features: ['1 business workspace', 'Up to 100 customers', 'AI business assistant (100 messages / month)', 'Appointments, tasks and notifications', 'AI customer support widget', 'Basic reports'],
-  },
-  {
-    id: 'plan_starter',
-    code: 'STARTER',
-    name: 'Starter',
-    tagline: 'For solo founders and small teams going digital.',
-    month: 2900,
-    year: 29000,
-    sort: 2,
-    limits: { customers: 2000, users: 5, aiMessages: 2000, documents: 200, whatsappMessages: 3000, storageMb: 2000, appointments: 5000, products: 1000 },
-    features: ['Everything in Free', 'Sales pipeline and lead scoring', 'Inventory with low-stock alerts', 'Document generator with PDF export', 'Marketing assistant', 'Weekly + monthly reports'],
-  },
-  {
-    id: 'plan_professional',
-    code: 'PROFESSIONAL',
-    name: 'Professional',
-    tagline: 'For growing businesses with a team and multiple channels.',
-    month: 7900,
-    year: 79000,
-    sort: 3,
-    limits: { customers: 25000, users: 15, aiMessages: 10000, documents: 2000, whatsappMessages: 15000, storageMb: 25000, appointments: 50000, products: 10000 },
-    features: ['Everything in Starter', 'Team roles and audit logs', 'Marketing calendar with approval workflow', 'Advanced analytics and AI recommendations', 'Priority support escalation', 'Custom knowledge base'],
-  },
-  {
-    id: 'plan_business',
-    code: 'BUSINESS',
-    name: 'Business',
-    tagline: 'For established operations that need scale and control.',
-    month: 19900,
-    year: 199000,
-    sort: 4,
-    limits: { customers: 250000, users: 60, aiMessages: 60000, documents: 20000, whatsappMessages: 100000, storageMb: 250000, appointments: 500000, products: 100000 },
-    features: ['Everything in Professional', 'Unlimited locations and workspaces', 'Dedicated manager and onboarding', 'Integration support (payments, WhatsApp, calendar)', 'SLA-backed AI usage', 'Data export and retention controls'],
-  },
-];
+const planFile = JSON.parse(fs.readFileSync(path.join(root, 'db', 'plans.json'), 'utf8'));
+const PLANS = planFile.plans;
 
 for (const plan of PLANS) {
   db.prepare(
     `INSERT INTO plans (id, code, name, tagline, price_month_cents, price_year_cents, currency, limits_json,
                         features_json, sort_order, active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?, 1, ?, ?)
-     ON CONFLICT(code) DO UPDATE SET name = excluded.name, tagline = excluded.tagline,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+     ON CONFLICT(code) DO UPDATE SET id = excluded.id, name = excluded.name, tagline = excluded.tagline,
        price_month_cents = excluded.price_month_cents, price_year_cents = excluded.price_year_cents,
-       limits_json = excluded.limits_json, features_json = excluded.features_json,
-       sort_order = excluded.sort_order, updated_at = excluded.updated_at`,
-  ).run(plan.id, plan.code, plan.name, plan.tagline, plan.month, plan.year, j(plan.limits), j(plan.features), plan.sort, nowIso, nowIso);
+       currency = excluded.currency, limits_json = excluded.limits_json,
+       features_json = excluded.features_json, sort_order = excluded.sort_order, updated_at = excluded.updated_at`,
+  ).run(
+    plan.id, plan.code, plan.name, plan.tagline, plan.priceMonthCents, plan.priceYearCents,
+    plan.currency, j(plan.limits), j(plan.features), plan.sortOrder, nowIso, nowIso,
+  );
 }
 
 // ---------------------------------------------------------------------------

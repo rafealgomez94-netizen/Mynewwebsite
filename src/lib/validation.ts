@@ -365,6 +365,16 @@ export const planChangeSchema = z.object({
   billingCycle: z.enum(['MONTHLY', 'YEARLY']).default('MONTHLY'),
 });
 
+/**
+ * Workspace integrations. Credentials are deliberately absent: they come from server environment
+ * variables, so only the provider, the desired state and non-secret settings travel in the body.
+ */
+export const integrationUpdateSchema = z.object({
+  provider: z.string().min(2).max(40),
+  status: z.enum(['CONNECTED', 'DISCONNECTED']).optional(),
+  config: z.record(z.string(), z.union([z.string().max(200), z.number(), z.null()])).optional(),
+});
+
 export const memberInviteSchema = z.object({
   email: z.string().email().max(200),
   role: z.enum(BUSINESS_ROLES).default('STAFF'),

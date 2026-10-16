@@ -12,6 +12,7 @@ import {
   CalendarCheck,
   ChevronDown,
   CreditCard,
+  Plug,
   FileText,
   Gauge,
   Headphones,
@@ -93,6 +94,7 @@ const NAV_GROUPS: { label: string; items: { href: string; label: string; icon: t
     label: 'Business',
     items: [
       { href: '/dashboard/billing', label: 'Plan & billing', icon: CreditCard },
+      { href: '/dashboard/integrations', label: 'Integrations', icon: Plug },
       { href: '/dashboard/team', label: 'Team & roles', icon: ShieldCheck },
       { href: '/dashboard/settings', label: 'Settings', icon: Settings },
     ],

@@ -1,3 +1,4 @@
+import planFile from '../../../../db/plans.json';
 import { all, get, json, nowIso, run, scalar, toJson } from '@/lib/db';
 import { newId } from '@/lib/utils';
 
@@ -28,124 +29,31 @@ export type Plan = {
   sortOrder: number;
 };
 
-export const PLAN_CATALOGUE: (Omit<Plan, 'id'> & { id: string })[] = [
-  {
-    id: 'plan_free',
-    code: 'FREE',
-    name: 'Free',
-    tagline: 'Get organised and try the AI assistant.',
-    priceMonthCents: 0,
-    priceYearCents: 0,
-    currency: 'USD',
-    limits: {
-      customers: 100,
-      users: 2,
-      aiMessages: 100,
-      documents: 10,
-      whatsappMessages: 200,
-      storageMb: 50,
-      appointments: 100,
-      products: 50,
-    },
-    features: [
-      '1 business workspace',
-      'Up to 100 customers',
-      'AI business assistant (100 messages / month)',
-      'Appointments, tasks and notifications',
-      'AI customer support widget',
-      'Basic reports',
-    ],
-    sortOrder: 1,
-  },
-  {
-    id: 'plan_starter',
-    code: 'STARTER',
-    name: 'Starter',
-    tagline: 'For solo founders and small teams going digital.',
-    priceMonthCents: 2900,
-    priceYearCents: 29000,
-    currency: 'USD',
-    limits: {
-      customers: 2000,
-      users: 5,
-      aiMessages: 2000,
-      documents: 200,
-      whatsappMessages: 3000,
-      storageMb: 2000,
-      appointments: 5000,
-      products: 1000,
-    },
-    features: [
-      'Everything in Free',
-      'Sales pipeline and lead scoring',
-      'Inventory with low-stock alerts',
-      'Document generator with PDF export',
-      'Marketing assistant',
-      'Weekly + monthly reports',
-    ],
-    sortOrder: 2,
-  },
-  {
-    id: 'plan_professional',
-    code: 'PROFESSIONAL',
-    name: 'Professional',
-    tagline: 'Automate operations across a growing team.',
-    priceMonthCents: 7900,
-    priceYearCents: 79000,
-    currency: 'USD',
-    limits: {
-      customers: 20000,
-      users: 25,
-      aiMessages: 12000,
-      documents: 2000,
-      whatsappMessages: 15000,
-      storageMb: 10000,
-      appointments: 50000,
-      products: 10000,
-    },
-    features: [
-      'Everything in Starter',
-      'AI analytics with recommendations',
-      'Multi-staff scheduling and availability',
-      'Knowledge base with document training',
-      'Automated daily / weekly / monthly reports',
-      'Role-based access control and audit logs',
-    ],
-    sortOrder: 3,
-  },
-  {
-    id: 'plan_business',
-    code: 'BUSINESS',
-    name: 'Business',
-    tagline: 'Multi-location operations with priority support.',
-    priceMonthCents: 19900,
-    priceYearCents: 199000,
-    currency: 'USD',
-    limits: {
-      customers: 200000,
-      users: 200,
-      aiMessages: 60000,
-      documents: 20000,
-      whatsappMessages: 100000,
-      storageMb: 100000,
-      appointments: 500000,
-      products: 100000,
-    },
-    features: [
-      'Everything in Professional',
-      'Multi-location workspaces',
-      'Integrations (WhatsApp, payments, calendar)',
-      'Advanced analytics and forecasting',
-      'Priority support and onboarding',
-      'Custom AI tone and escalation rules',
-    ],
-    sortOrder: 4,
-  },
-];
+/**
+ * Plan catalogue — the code-side view of `db/plans.json`.
+ *
+ * The pricing page, the terms page and `ensurePlans()` all read this, and the seed script upserts
+ * the very same file, so the advertised limits and the enforced limits cannot drift apart. They did:
+ * the pricing page promised Professional 20,000 customers / 25 users and Business 200 users while
+ * the database enforced 25,000 / 15 and 60. Where the two disagreed the lower limit won.
+ */
+export const PLAN_CATALOGUE: (Omit<Plan, 'id'> & { id: string })[] = planFile.plans.map((plan) => ({
+  id: plan.id,
+  code: plan.code,
+  name: plan.name,
+  tagline: plan.tagline,
+  priceMonthCents: plan.priceMonthCents,
+  priceYearCents: plan.priceYearCents,
+  currency: plan.currency,
+  limits: plan.limits as PlanLimits,
+  features: plan.features,
+  sortOrder: plan.sortOrder,
+}));
 
 export function ensurePlans(): void {
-  const existing = scalar<number>(`SELECT count(*) AS c FROM plans`, [], 0);
-  if (existing >= PLAN_CATALOGUE.length) return;
+  // Always upsert. This used to return early when the table already held enough rows, which
+  // meant a plan edited in code (or seeded with different limits) stayed wrong in the database
+  // for the lifetime of the install — the source of the pricing/enforcement mismatch.
   const now = nowIso();
   for (const plan of PLAN_CATALOGUE) {
     run(

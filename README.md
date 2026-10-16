@@ -41,7 +41,8 @@ A floating WhatsApp widget is present on every public page (number from `NEXT_PU
 | Documents | `/dashboard/documents` | Invoices, quotes, receipts, proposals, reports, customer messages, marketing plans, SOPs + PDF export |
 | Reports | `/dashboard/reports` | Daily/weekly/monthly reports, calculated metrics, optional AI narrative, PDF export |
 | Analytics | `/dashboard/analytics` | Revenue and customer trends, popular and poor performers, retention, lead conversion, operational problems, AI recommendations clearly separated from calculated statistics |
-| Billing | `/dashboard/billing` | Free/Starter/Professional/Business, usage against limits, upgrade/downgrade, billing status |
+| Billing | `/dashboard/billing` | Free/Starter/Professional/Business, usage against limits, upgrade/downgrade, billing status, and whether a subscription is actually in force (an unpaid or lapsed plan falls back to the free limits) |
+| Integrations | `/dashboard/integrations` | WhatsApp, payments and email delivery: what this deployment actually has configured, plus the workspace's own non-secret settings. Credentials stay in server environment variables |
 | Team | `/dashboard/team` | Members, roles, invitations, role changes, audit trail |
 | Settings | `/dashboard/settings` | Profile, business profile, hours, communication preferences, support settings |
 
@@ -146,7 +147,7 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, RBAC and tenant isolation — **95 checks in total**. It creates its own
+billing, invitations, integrations, RBAC and tenant isolation — **97 checks in total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -285,10 +286,10 @@ Both schema files are kept structurally identical (same tables, columns and inde
 | --- | --- |
 | Owner | Everything, including billing, deleting the business and transferring ownership |
 | Admin | Everything except ownership transfer; manage team, billing view, all workspaces |
-| Manager | Operations: customers, leads, appointments, tasks, orders, inventory, support, marketing, reports |
+| Manager | Operations: customers, leads, appointments, tasks, orders, inventory, support, marketing, reports, and read-only integration settings |
 | Staff | Day-to-day work: assigned appointments, tasks, customers, conversations |
 
-Every mutating API route resolves the session, requires tenant membership, checks the permission for that action, and scopes the query by `business_id`. Staff attempting administrative actions receive `403 forbidden`; unauthenticated API calls receive `401`.
+Permissions include `integrations:read` for managers and `integrations:write` for owners and admins. Every mutating API route resolves the session, requires tenant membership, checks the permission for that action, and scopes the query by `business_id`. Staff attempting administrative actions receive `403 forbidden`; unauthenticated API calls receive `401`.
 
 ---
 
@@ -309,7 +310,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **95 / 95 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **97 / 97 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -480,6 +481,43 @@ back, finds the original records intact and none of the other workspace's, and i
 workspace they do not belong to. Every one of the 48 API routes is exercised by the suite.
 
 
+### One source of truth for the plans
+
+The plan catalogue existed twice with **different numbers**. The pricing page rendered
+`PLAN_CATALOGUE` from the code while the API enforced the `plans` rows written by the seed script:
+Professional was advertised as 20,000 customers / 25 users but enforced 25,000 / 15, and Business
+was advertised with 200 users but enforced 60. `ensurePlans()` made it worse — it returned early
+whenever the table already held enough rows, so a corrected catalogue could never reach a database
+that had been seeded once.
+
+`db/plans.json` is now the single source: the code reads it for pricing, terms and limits,
+`ensurePlans()` upserts it on every call, and the seed writes the same rows. Where the two old
+copies disagreed the **lower** limit won, so the public page can never promise more than the API
+enforces. Verified live: the API reports 20,000 customers / 15 users / 10,000 AI messages for
+Professional and 200,000 / 60 / 60,000 for Business, and the rendered pricing page quotes exactly
+those figures.
+
+### Integration settings that state the truth
+
+"Integrations (WhatsApp, payments, calendar)" was advertised on the Business plan while the
+`integrations` table had no route or page at all — the repository functions were unreachable. There
+is now a real surface: `GET|PATCH /api/integrations` and `/dashboard/integrations`.
+
+It is deliberately honest about state. Each provider (WhatsApp handoff, payments, email delivery)
+reports two separate things: **whether this deployment has the credentials** — read from the server
+environment, e.g. `STRIPE_SECRET_KEY`, `SMTP_HOST`, `NEXT_PUBLIC_SUPPORT_WHATSAPP` — and whether
+the workspace has switched it on. A provider can be switched on while the credential check still
+says "missing", and the page shows both rather than implying a live connection. Nothing calls
+WhatsApp, Stripe or SMTP to claim verification, no credential can be entered in the dashboard, and
+only the provider's declared non-secret fields are stored (unknown keys are dropped).
+
+Verified live: anonymous `401`, manager read-only (`403` on write), staff `403`, unknown provider
+`422 unsupported_type`, empty body `422 validation_error`, settings round-trip with the smuggled key
+dropped, `integration.connected` in the audit log, and a second tenant sees its own disconnected
+state rather than the first tenant's connection. The calendar claim was dropped from the plan copy —
+there is no calendar sync to sell.
+
+
 ### Money is printed in the workspace currency, everywhere
 
 The regional switch to Liberia surfaced a currency defect that had been invisible while the demo
@@ -572,6 +610,11 @@ verified without them:
 | 1 | Landing page, authentication, onboarding, dashboard, customer management, AI business assistant | Built |
 | 2 | CRM and pipeline, appointments, tasks and notifications, AI customer support, knowledge base | Built |
 | 3 | Inventory, orders and sales, AI marketing, documents with PDF export, reports | Built |
-| 4 | Subscriptions and billing, platform admin, advanced analytics, integrations (payments, WhatsApp, calendar) | Built |
+| 4 | Subscriptions and billing, platform admin, advanced analytics, integration settings (payments, WhatsApp, email) | Built |
 
 Each phase is wired end to end: UI → API route → repository → database, with the AI layer reading the same verified data the dashboard shows.
+
+Integration settings record which providers a workspace uses and report whether this deployment has
+the credentials — they are configuration, not live third-party calls. Anything that would talk to a
+provider on your behalf (sending WhatsApp messages through the Cloud API, charging a card) is a
+provider-side connection you point at your own account; see §11.

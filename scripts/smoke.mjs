@@ -1906,6 +1906,62 @@ await check('accept-invite flow works end to end', async () => {
   return 'preview → weak rejected → accepted → signed in → single use';
 });
 
+await check('integration settings are honest, tenant-scoped and audited', async () => {
+  const list = await owner.get('/api/integrations');
+  eq(list.status, 200, 'GET /api/integrations');
+  const providers = list.json.data.integrations ?? [];
+  assert(providers.length >= 3, 'expected the WhatsApp, payments and email providers');
+  for (const entry of providers) {
+    assert(typeof entry.configured === 'boolean', `${entry.provider} did not report credential state`);
+    assert(entry.detail, `${entry.provider} did not explain its state`);
+    eq(entry.status, 'DISCONNECTED', `${entry.provider} should start switched off`);
+  }
+
+  // Anonymous and non-owner roles.
+  eq((await anon.get('/api/integrations')).status, 401, 'anonymous listing');
+  const managerList = await invitee.get('/api/integrations');
+  eq(managerList.status, 200, 'managers may read integration settings');
+  eq(managerList.json.data.limits.canManage, false, 'managers must not be able to change them');
+  const managerWrite = await invitee.patch('/api/integrations', { provider: 'EMAIL', status: 'CONNECTED' });
+  eq(managerWrite.status, 403, 'manager write');
+  eq(managerWrite.json.error.code, 'forbidden', 'manager write code');
+
+  // Unknown providers and empty bodies are rejected before anything is stored.
+  const unknown = await owner.patch('/api/integrations', { provider: 'NOT_A_PROVIDER', status: 'CONNECTED' });
+  eq(unknown.status, 422, 'unknown provider');
+  eq((await owner.patch('/api/integrations', {})).status, 422, 'missing provider');
+
+  // Non-secret settings round-trip; unknown keys are dropped rather than stored.
+  const saved = await owner.patch('/api/integrations', {
+    provider: 'WHATSAPP',
+    status: 'CONNECTED',
+    config: { number: '0774075285', handoffMessage: 'Hello', smuggled: 'drop me' },
+  });
+  eq(saved.status, 200, 'PATCH /api/integrations');
+  const row = saved.json.data.integration;
+  eq(row.status, 'CONNECTED', 'integration status');
+  eq(row.config.number, '0774075285', 'stored number');
+  assert(!('smuggled' in row.config), 'an undeclared config key was stored');
+  // Credentials must never appear in the response, only whether the deployment has them.
+  assert(
+    !/"(secret|password|api[_-]?key|access[_-]?key|token)"/i.test(JSON.stringify(row)),
+    `the integration payload carried something credential-shaped: ${JSON.stringify(row)}`,
+  );
+
+  // The change is written to the audit log and can be switched off again.
+  const logs = await owner.get('/api/team');
+  const actions = (logs.json.data.auditLogs ?? []).map((entry) => entry.action);
+  assert(
+    actions.includes('integration.connected'),
+    `expected integration.connected in the audit log, saw ${actions.slice(0, 6).join(', ')}`,
+  );
+  const off = await owner.patch('/api/integrations', { provider: 'WHATSAPP', status: 'DISCONNECTED' });
+  eq(off.status, 200, 'disconnect');
+  eq(off.json.data.integration.status, 'DISCONNECTED', 'disconnect applied');
+
+  return `${providers.length} providers, credential state reported, RBAC enforced, audited`;
+});
+
 await check('managers cannot change billing (RBAC)', async () => {
   const res = await invitee.post('/api/billing', { planCode: 'BUSINESS' });
   eq(res.status, 403, 'manager billing change');
@@ -2020,6 +2076,24 @@ await check('a second tenant cannot read the first tenant’s records', async ()
   return '404 on foreign records, empty own list';
 });
 
+await check('another workspace cannot see the first workspace’s integrations', async () => {
+  // Connect a provider in the suite's own tenant, then read the list as the second tenant: the
+  // integration table is tenant-scoped, so the second workspace must see its own untouched state.
+  const mine = await owner.patch('/api/integrations', { provider: 'PAYMENTS', status: 'CONNECTED', config: { accountLabel: 'Suite account' } });
+  eq(mine.status, 200, 'connect a provider in the first tenant');
+  eq(mine.json.data.integration.status, 'CONNECTED', 'first tenant stores CONNECTED');
+
+  const theirs = await second.get('/api/integrations');
+  eq(theirs.status, 200, 'second tenant list');
+  const payments = (theirs.json.data.integrations ?? []).find((entry) => entry.provider === 'PAYMENTS');
+  assert(payments, 'second tenant did not receive the provider list');
+  eq(payments.status, 'DISCONNECTED', 'second tenant must not see the first tenant\u2019s connection');
+  eq(Object.keys(payments.config ?? {}).length, 0, 'second tenant must not see the first tenant’s config');
+
+  await owner.patch('/api/integrations', { provider: 'PAYMENTS', status: 'DISCONNECTED' });
+  return 'integration rows are tenant-scoped';
+});
+
 await check('a plain user cannot reach the platform admin API', async () => {
   const res = await owner.get('/api/admin/overview');
   eq(res.status, 403, 'admin API for a business owner');
@@ -2112,6 +2186,7 @@ await check('dashboard pages render with a session', async () => {
     '/dashboard/reports': 'Reports',
     '/dashboard/analytics': 'Analytics',
     '/dashboard/billing': 'Billing',
+    '/dashboard/integrations': 'Integrations',
     '/dashboard/team': 'Team',
     '/dashboard/settings': 'Settings',
   };

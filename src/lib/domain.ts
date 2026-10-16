@@ -46,6 +46,8 @@ export const PERMISSIONS = [
   'ai:use',
   'billing:read',
   'billing:manage',
+  'integrations:read',
+  'integrations:write',
   'audit:read',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
@@ -81,6 +83,7 @@ export const ROLE_PERMISSIONS: Record<BusinessRole, Permission[]> = {
     'analytics:read',
     'ai:use',
     'billing:read',
+    'integrations:read',
   ],
   STAFF: [
     'business:read',

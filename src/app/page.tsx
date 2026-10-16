@@ -130,30 +130,34 @@ const STEPS = [
 const INDUSTRIES = [
   { icon: Sparkles, name: 'Salons & spas', detail: 'Bookings, staff schedules, no-show reminders, service menus and rebooking offers.' },
   { icon: Store, name: 'Restaurants & bars', detail: 'Menus, reservations, table turnover insights, special offers and allergen FAQs.' },
-  { icon: Truck, name: 'Retail & e-commerce', detail: 'Stock levels, low-stock alerts, best sellers, price lists and order history.' },
+  { icon: Truck, name: 'Retail & e-commerce', detail: 'Stock levels, low-stock alerts, best sellers, price lists and order history — cash, card or mobile money sales.' },
   { icon: ShieldCheck, name: 'Clinics', detail: 'Appointment slots, patient follow-ups, service pricing and privacy-first access control.' },
-  { icon: CalendarCheck, name: 'Hotels & hospitality', detail: 'Guest requests, room services, local recommendations and fast guest replies.' },
+  { icon: CalendarCheck, name: 'Hotels & hospitality', detail: 'Guest requests, room services, local recommendations and fast guest replies in the guest’s own language.' },
   { icon: UserRound, name: 'Service businesses & freelancers', detail: 'Quotes, proposals, invoices, reminders and a pipeline for every opportunity.' },
 ];
 
-const TESTIMONIALS = [
+/**
+ * Illustrative scenarios, not customer quotes.
+ *
+ * These are composite examples of the workflows the platform is built around. They are labelled
+ * as illustrative on the page and must be replaced with real, consented quotes — including the
+ * business name and a verifiable result — before this section is presented as social proof.
+ */
+const ILLUSTRATIVE_SCENARIOS = [
   {
     quote:
-      'We stopped losing bookings the week we switched. The AI answers the same questions my staff answered a hundred times a day, and I finally see my numbers in one place.',
-    name: 'Lerato M.',
-    role: 'Owner, hair and beauty studio',
+      'A hair and beauty studio stops losing bookings: the AI answers the same questions the receptionist answered a hundred times a day, and the owner sees the week’s numbers in one place.',
+    context: 'Hair and beauty studio · booking and support workflow',
   },
   {
     quote:
-      'Low-stock alerts alone paid for the subscription. We used to run out of our best seller every Friday. Now we reorder before it happens.',
-    name: 'Daniel O.',
-    role: 'Retail store manager',
+      'A retail shop runs out of its best seller every Friday. Low-stock alerts arrive before it happens, with the quantity already sold named in the alert.',
+    context: 'Retail store · inventory workflow',
   },
   {
     quote:
-      'The follow-up assistant is the part I did not know I needed. It tells me who has gone quiet and gives me the message to send.',
-    name: 'Fatima A.',
-    role: 'Clinic operations lead',
+      'A clinic loses track of follow-ups. The assistant lists the customers who have gone quiet and drafts the message to send, for a human to approve.',
+    context: 'Clinic · follow-up workflow',
   },
 ];
 
@@ -189,6 +193,11 @@ const FAQS = [
       'Yes. The Free plan includes the dashboard, CRM, appointments, tasks, notifications and a monthly AI allowance. Upgrade to Starter, Professional or Business when you need more customers, users, AI messages, documents or storage.',
   },
   {
+    question: 'Is it built for Liberia and West Africa?',
+    answer:
+      'Yes. The platform is deliberately region-neutral where it matters and locally aware where it counts: each workspace sets its own currency (Liberian dollars, US dollars or any ISO currency), time zone, opening hours and payment methods, WhatsApp is a first-class channel, and the WhatsApp contact number uses a configurable country dial code (231 by default). Nothing about the product assumes a European or American business.',
+  },
+  {
     question: 'Which industries do you support?',
     answer:
       'Salons, restaurants, bars, retail stores, e-commerce, clinics, hotels, service businesses, freelancers, agencies and small companies. The architecture is industry-aware, so industry-specific tools can be added without changing your data.',
@@ -212,7 +221,7 @@ function HeroMock() {
           <div className="rounded-xl border p-3">
             <p className="muted text-[11px] uppercase tracking-wide">Revenue · last 7 days</p>
             <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-xl font-semibold">{formatMoney(482500)}</span>
+              <span className="text-xl font-semibold">{formatMoney(482500, 'LRD')}</span>
               <span className="text-xs font-medium text-emerald-600">▲ 23%</span>
             </div>
             <svg viewBox="0 0 300 60" className="mt-3 h-14 w-full">
@@ -294,7 +303,7 @@ export default function LandingPage() {
           <div className="relative mx-auto grid max-w-7xl gap-12 px-4 py-16 sm:px-6 lg:grid-cols-[1.05fr_1fr] lg:items-center lg:px-8 lg:py-24">
             <div>
               <Badge tone="brand" className="mb-5">
-                <Sparkles className="h-3 w-3" /> AI business operating system
+                <Sparkles className="h-3 w-3" /> AI business operating system · Liberia &amp; West Africa
               </Badge>
               <h1 className="text-4xl font-semibold leading-tight tracking-tight sm:text-5xl lg:text-[3.4rem]">
                 Run Your Business Smarter With AI
@@ -302,6 +311,10 @@ export default function LandingPage() {
               <p className="muted mt-5 max-w-xl text-lg">
                 AI-powered tools that help businesses automate operations, serve customers, increase sales, and make
                 better decisions from one platform.
+              </p>
+              <p className="muted mt-3 max-w-xl text-sm">
+                Built for how business is actually done here: WhatsApp conversations, prices in your own currency
+                (Liberian dollars by default), and policies, hours and payment methods you control.
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link href="/signup">
@@ -320,7 +333,7 @@ export default function LandingPage() {
                   'Free plan, no card required',
                   'AI assistant on your own data',
                   'Isolated workspace per business',
-                  'Set up in under 10 minutes',
+                  'Liberian dollars, USD or your currency',
                 ].map((item) => (
                   <li key={item} className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-emerald-600" aria-hidden />
@@ -576,16 +589,20 @@ export default function LandingPage() {
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div className="max-w-2xl">
               <Badge tone="info" className="mb-4">
-                What owners say
+                Illustrative scenarios
               </Badge>
-              <h2 className="text-3xl font-semibold sm:text-4xl">Built with business owners, not for a demo</h2>
+              <h2 className="text-3xl font-semibold sm:text-4xl">The work that changes in the first month</h2>
+              <p className="muted mt-4">
+                Composite examples of the workflows the platform is built around — not customer endorsements. Real
+                results are shown only with the business’s permission.
+              </p>
             </div>
             <div className="mt-10 grid gap-5 lg:grid-cols-3">
-              {TESTIMONIALS.map((testimonial) => (
-                <figure key={testimonial.name} className="card flex h-full flex-col p-6">
-                  <blockquote className="text-sm leading-relaxed">“{testimonial.quote}”</blockquote>
-                  <figcaption className="muted mt-5 text-sm">
-                    <span className="font-semibold text-[rgb(var(--text))]">{testimonial.name}</span> · {testimonial.role}
+              {ILLUSTRATIVE_SCENARIOS.map((scenario) => (
+                <figure key={scenario.context} className="card flex h-full flex-col p-6">
+                  <blockquote className="text-sm leading-relaxed">“{scenario.quote}”</blockquote>
+                  <figcaption className="muted mt-5 text-xs">
+                    <span className="font-semibold text-[rgb(var(--text))]">Illustrative</span> · {scenario.context}
                   </figcaption>
                 </figure>
               ))}

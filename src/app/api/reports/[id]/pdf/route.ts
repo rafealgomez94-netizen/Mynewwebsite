@@ -31,14 +31,14 @@ export async function GET(_request: Request, { params }: Params) {
         }`,
       },
       { type: 'heading', text: 'Calculated from stored data' },
-      { type: 'kv', label: 'Revenue', value: formatMoney(metrics.revenueCents) },
+      { type: 'kv', label: 'Revenue', value: formatMoney(metrics.revenueCents, metrics.currency) },
       {
         type: 'kv',
         label: 'Change vs previous',
         value: `${metrics.revenueChangePct >= 0 ? '+' : ''}${metrics.revenueChangePct.toFixed(1)}%`,
       },
       { type: 'kv', label: 'Orders', value: String(metrics.orders) },
-      { type: 'kv', label: 'Average order', value: formatMoney(metrics.averageOrderCents) },
+      { type: 'kv', label: 'Average order', value: formatMoney(metrics.averageOrderCents, metrics.currency) },
       { type: 'kv', label: 'New customers', value: String(metrics.newCustomers) },
       { type: 'kv', label: 'Total customers', value: String(metrics.totalCustomers) },
       {
@@ -59,7 +59,7 @@ export async function GET(_request: Request, { params }: Params) {
         type: 'table',
         columns: ['Item', 'Units', 'Revenue'],
         columnWidths: [300, 80, 120],
-        rows: metrics.topItems.map((item) => [item.name, String(item.units), formatMoney(item.revenueCents)]),
+        rows: metrics.topItems.map((item) => [item.name, String(item.units), formatMoney(item.revenueCents, metrics.currency)]),
       });
     }
 
@@ -74,7 +74,7 @@ export async function GET(_request: Request, { params }: Params) {
         type: 'table',
         columns: ['Stage', 'Leads', 'Value'],
         columnWidths: [220, 80, 200],
-        rows: metrics.leads.map((lead) => [lead.stage.replace('_', ' '), String(lead.count), formatMoney(lead.valueCents)]),
+        rows: metrics.leads.map((lead) => [lead.stage.replace('_', ' '), String(lead.count), formatMoney(lead.valueCents, metrics.currency)]),
       });
     }
 

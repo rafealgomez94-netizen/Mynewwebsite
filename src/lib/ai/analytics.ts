@@ -36,16 +36,16 @@ export function calculatedStats(facts: BusinessFactPack): CalculatedStat[] {
     {
       id: 'revenue_week',
       label: 'Revenue · last 7 days',
-      value: formatMoney(facts.revenue.weekCents),
+      value: formatMoney(facts.revenue.weekCents, facts.currency),
       changePct: facts.revenue.weekChangePct,
       hint: `${formatNumber(facts.revenue.weekOrders)} orders`,
     },
     {
       id: 'revenue_month',
       label: 'Revenue · last 30 days',
-      value: formatMoney(facts.revenue.monthCents),
+      value: formatMoney(facts.revenue.monthCents, facts.currency),
       changePct: facts.revenue.monthChangePct,
-      hint: `Average order ${formatMoney(facts.revenue.monthAverageCents)}`,
+      hint: `Average order ${formatMoney(facts.revenue.monthAverageCents, facts.currency)}`,
     },
     {
       id: 'customers_new',
@@ -69,7 +69,7 @@ export function calculatedStats(facts: BusinessFactPack): CalculatedStat[] {
       id: 'inventory_risk',
       label: 'Products at/below minimum',
       value: formatNumber(facts.inventory.lowStockCount),
-      hint: `Stock value ${formatMoney(facts.inventory.trackableValueCents)} at cost`,
+      hint: `Stock value ${formatMoney(facts.inventory.trackableValueCents, facts.currency)} at cost`,
       tone: facts.inventory.lowStockCount > 0 ? 'warning' : 'positive',
     },
     {
@@ -105,8 +105,8 @@ export function recommendations(facts: BusinessFactPack): Insight[] {
           : `Revenue is down ${Math.abs(revenueChange).toFixed(1)}% week over week`,
       detail:
         revenueChange >= 0
-          ? `Keep the momentum: the last 7 days produced ${formatMoney(facts.revenue.weekCents)} across ${facts.revenue.weekOrders} orders. Consider a follow-up campaign to customers who have not ordered in 30+ days.`
-          : `Last 7 days produced ${formatMoney(facts.revenue.weekCents)} versus ${formatMoney(facts.revenue.weekCents / (1 + revenueChange / 100 || 1))} the week before. A re-engagement offer to returning customers usually recovers 10–20% of a dip.`,
+          ? `Keep the momentum: the last 7 days produced ${formatMoney(facts.revenue.weekCents, facts.currency)} across ${facts.revenue.weekOrders} orders. Consider a follow-up campaign to customers who have not ordered in 30+ days.`
+          : `Last 7 days produced ${formatMoney(facts.revenue.weekCents, facts.currency)} versus ${formatMoney(facts.revenue.weekCents / (1 + revenueChange / 100 || 1), facts.currency)} the week before. A re-engagement offer to returning customers usually recovers 10–20% of a dip.`,
       action: { label: 'Create a marketing campaign', href: '/dashboard/marketing' },
     });
   }
@@ -118,7 +118,7 @@ export function recommendations(facts: BusinessFactPack): Insight[] {
       kind: 'AI_RECOMMENDATION',
       severity: 'info',
       title: `Your most popular service is ${topService.name}`,
-      detail: `${topService.bookings} bookings recorded at ${formatMoney(topService.priceCents)}. Consider a bundle with a complementary service to raise average order value.`,
+      detail: `${topService.bookings} bookings recorded at ${formatMoney(topService.priceCents, facts.currency)}. Consider a bundle with a complementary service to raise average order value.`,
       action: { label: 'Package this service', href: '/dashboard/services' },
     });
   }
@@ -144,7 +144,7 @@ export function recommendations(facts: BusinessFactPack): Insight[] {
       kind: 'AI_RECOMMENDATION',
       severity: 'info',
       title: `${best.name} is your best seller`,
-      detail: `${best.units} units / ${formatMoney(best.revenueCents)} in the last 30 days. Feature it in this week's social post and pair it with slower-moving stock.`,
+      detail: `${best.units} units / ${formatMoney(best.revenueCents, facts.currency)} in the last 30 days. Feature it in this week's social post and pair it with slower-moving stock.`,
       action: { label: 'Generate a social post', href: '/dashboard/marketing' },
     });
   }

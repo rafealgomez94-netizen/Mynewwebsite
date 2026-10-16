@@ -11,7 +11,7 @@ import {
   commsFor,
   updateBusiness,
 } from '@/lib/db/repositories/accounts';
-import { createSubscription } from '@/lib/db/repositories/platform';
+import { createSubscription, DEFAULT_CURRENCY } from '@/lib/db/repositories/platform';
 import { getSupportSettings } from '@/lib/db/repositories/comms';
 import { audit } from '@/lib/services/notify';
 
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
       email: input.email || null,
       website: input.website || null,
       timezone: input.timezone || 'UTC',
-      currency: input.currency || 'USD',
+      currency: input.currency || DEFAULT_CURRENCY,
       hours: normaliseHours(input.hours),
       comms: input.comms,
     });

@@ -44,6 +44,28 @@ const STEPS = [
   'Documents',
 ];
 
+/**
+ * Currencies a business in Liberia and the wider region actually trades in. Liberian dollars come
+ * first because that is the default for a new workspace; the list is a convenience, not a limit —
+ * the API accepts any ISO 4217 code.
+ */
+const CURRENCY_OPTIONS = [
+  { code: 'LRD', label: 'LRD — Liberian dollar' },
+  { code: 'USD', label: 'USD — US dollar' },
+  { code: 'GHS', label: 'GHS — Ghanaian cedi' },
+  { code: 'NGN', label: 'NGN — Nigerian naira' },
+  { code: 'SLE', label: 'SLE — Sierra Leonean leone' },
+  { code: 'GMD', label: 'GMD — Gambian dalasi' },
+  { code: 'XOF', label: 'XOF — West African CFA franc' },
+  { code: 'ZAR', label: 'ZAR — South African rand' },
+  { code: 'KES', label: 'KES — Kenyan shilling' },
+  { code: 'EUR', label: 'EUR — Euro' },
+  { code: 'GBP', label: 'GBP — Pound sterling' },
+  { code: 'CAD', label: 'CAD — Canadian dollar' },
+  { code: 'AUD', label: 'AUD — Australian dollar' },
+  { code: 'INR', label: 'INR — Indian rupee' },
+];
+
 export function OnboardingWizard({
   initial,
 }: {
@@ -88,7 +110,7 @@ export function OnboardingWizard({
     email: initial?.email ?? '',
     website: initial?.website ?? '',
     timezone: initial?.timezone ?? 'UTC',
-    currency: initial?.currency ?? 'USD',
+    currency: initial?.currency ?? 'LRD',
   });
 
   const [hours, setHours] = useState(
@@ -386,13 +408,13 @@ export function OnboardingWizard({
                 <Input value={business.website} onChange={(event) => setBusiness({ ...business, website: event.target.value })} placeholder="https://" />
               </Field>
               <Field label="Timezone">
-                <Input value={business.timezone} onChange={(event) => setBusiness({ ...business, timezone: event.target.value })} placeholder="Africa/Johannesburg" />
+                <Input value={business.timezone} onChange={(event) => setBusiness({ ...business, timezone: event.target.value })} placeholder="Africa/Monrovia" />
               </Field>
-              <Field label="Currency">
+              <Field label="Currency" hint="Prices, invoices and AI answers use it">
                 <Select value={business.currency} onChange={(event) => setBusiness({ ...business, currency: event.target.value })}>
-                  {['USD', 'ZAR', 'GBP', 'EUR', 'NGN', 'KES', 'AUD', 'CAD', 'INR'].map((currency) => (
-                    <option key={currency} value={currency}>
-                      {currency}
+                  {CURRENCY_OPTIONS.map((option) => (
+                    <option key={option.code} value={option.code}>
+                      {option.label}
                     </option>
                   ))}
                 </Select>

@@ -15,6 +15,8 @@ import { renderFactPack } from '@/lib/ai/facts';
 
 export type ReportMetrics = {
   period: ReportPeriod;
+  /** ISO code of the workspace currency — every money figure below is printed in it. */
+  currency: string;
   periodStart: string;
   periodEnd: string;
   revenueCents: number;
@@ -36,6 +38,7 @@ export type ReportMetrics = {
 
 export function buildReportMetrics(businessId: string, period: ReportPeriod): ReportMetrics {
   const { startIso, endIso, start, end } = periodRange(period);
+  const currency = findBusinessById(businessId)?.currency ?? 'USD';
   const previousStart = new Date(start.getTime() - (end.getTime() - start.getTime())).toISOString();
 
   const current = revenueSummary(businessId, startIso, endIso);
@@ -46,6 +49,7 @@ export function buildReportMetrics(businessId: string, period: ReportPeriod): Re
 
   return {
     period,
+    currency,
     periodStart: start.toISOString(),
     periodEnd: end.toISOString(),
     revenueCents: current.revenue,
@@ -90,19 +94,19 @@ export function metricsToText(metrics: ReportMetrics, businessName: string): str
     `Period: ${metrics.periodStart.slice(0, 10)} → ${metrics.periodEnd.slice(0, 10)}`,
     '',
     'CALCULATED FROM STORED DATA',
-    `Revenue: ${formatMoney(metrics.revenueCents)} (${metrics.revenueChangePct >= 0 ? '+' : ''}${metrics.revenueChangePct.toFixed(1)}% vs previous period)`,
-    `Orders: ${metrics.orders} · Average order ${formatMoney(metrics.averageOrderCents)}`,
+    `Revenue: ${formatMoney(metrics.revenueCents, metrics.currency)} (${metrics.revenueChangePct >= 0 ? '+' : ''}${metrics.revenueChangePct.toFixed(1)}% vs previous period)`,
+    `Orders: ${metrics.orders} · Average order ${formatMoney(metrics.averageOrderCents, metrics.currency)}`,
     `New customers: ${metrics.newCustomers} (total ${metrics.totalCustomers})`,
     `Appointments: ${metrics.appointments.total} total, ${metrics.appointments.completed} completed, ${metrics.appointments.cancelled} cancelled/no-show, ${metrics.appointments.upcoming} upcoming`,
     `Open conversations: ${metrics.support.openConversations} · Open tickets: ${metrics.support.openTickets}`,
     '',
     'TOP ITEMS',
     ...(metrics.topItems.length
-      ? metrics.topItems.map((item) => `- ${item.name}: ${item.units} units, ${formatMoney(item.revenueCents)}`)
+      ? metrics.topItems.map((item) => `- ${item.name}: ${item.units} units, ${formatMoney(item.revenueCents, metrics.currency)}`)
       : ['- No sales recorded in this period']),
     '',
     'PIPELINE',
-    ...(metrics.leads.length ? metrics.leads.map((lead) => `- ${lead.stage}: ${lead.count} (${formatMoney(lead.valueCents)})`) : ['- No leads recorded']),
+    ...(metrics.leads.length ? metrics.leads.map((lead) => `- ${lead.stage}: ${lead.count} (${formatMoney(lead.valueCents, metrics.currency)})`) : ['- No leads recorded']),
     '',
     'LOW STOCK',
     ...(metrics.lowStock.length ? metrics.lowStock.map((product) => `- ${product.name}: ${product.quantity} left (min ${product.minStock})`) : ['- No low stock items']),
@@ -174,5 +178,5 @@ export async function recentOrdersForReport(businessId: string, period: ReportPe
 }
 
 export function dashboardHeadline(metrics: ReportMetrics): string {
-  return `${formatNumber(metrics.orders)} orders · ${formatMoney(metrics.revenueCents)} revenue · ${metrics.newCustomers} new customers`;
+  return `${formatNumber(metrics.orders)} orders · ${formatMoney(metrics.revenueCents, metrics.currency)} revenue · ${metrics.newCustomers} new customers`;
 }

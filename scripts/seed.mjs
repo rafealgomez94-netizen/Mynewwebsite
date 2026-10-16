@@ -31,7 +31,7 @@ const OWNER_EMAIL = process.env.SEED_OWNER_EMAIL || 'owner@test.local';
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL || 'admin@workspacedigital.app';
 const MANAGER_EMAIL = process.env.SEED_MANAGER_EMAIL || 'manager@test.local';
 const STAFF_EMAIL = process.env.SEED_STAFF_EMAIL || 'staff@test.local';
-const DEMO_SLUG = process.env.SEED_BUSINESS_SLUG || 'windhoek-beauty-studio';
+const DEMO_SLUG = process.env.SEED_BUSINESS_SLUG || 'monrovia-beauty-studio';
 
 const passwords = {
   admin: process.env.SEED_ADMIN_PASSWORD || 'AdminPassw0rd!',
@@ -183,7 +183,7 @@ insert('users', {
   name: 'Rafeal Gomez',
   phone: '0888937524',
   job_title: 'Owner',
-  timezone: 'Africa/Windhoek',
+  timezone: 'Africa/Monrovia',
   locale: 'en',
   theme: 'system',
   platform_role: 'USER',
@@ -194,8 +194,8 @@ insert('users', {
   updated_at: nowIso,
 });
 for (const [id, email, name, title, password] of [
-  [managerUserId, MANAGER_EMAIL, 'Ndapewa Amutenya', 'Salon manager', passwords.manager],
-  [staffUserId, STAFF_EMAIL, 'Teresia Shikongo', 'Senior stylist', passwords.staff],
+  [managerUserId, MANAGER_EMAIL, 'Miatta Kpadeh', 'Salon manager', passwords.manager],
+  [staffUserId, STAFF_EMAIL, 'Grace Toe', 'Senior stylist', passwords.staff],
 ]) {
   insert('users', {
     id,
@@ -204,7 +204,7 @@ for (const [id, email, name, title, password] of [
     password_hash: hash(password),
     name,
     job_title: title,
-    timezone: 'Africa/Windhoek',
+    timezone: 'Africa/Monrovia',
     locale: 'en',
     theme: 'system',
     platform_role: 'USER',
@@ -226,18 +226,18 @@ const hours = [
 
 insert('businesses', {
   id: businessId,
-  name: 'Windhoek Beauty Studio',
+  name: 'Monrovia Beauty Studio',
   slug: DEMO_SLUG,
   type: 'salon',
-  description: 'Hair, nails and skin studio in the Windhoek CBD. Braids, gel manicures, facials and massage by appointment or walk-in.',
-  address: '48 Independence Avenue',
-  city: 'Windhoek',
-  country: 'Namibia',
-  phone: '0888937524',
-  email: 'hello@windhoekbeauty.example',
-  website: 'https://windhoekbeauty.example',
-  timezone: 'Africa/Windhoek',
-  currency: 'NAD',
+  description: 'Hair, nails and skin studio on Broad Street in central Monrovia. Braids, gel manicures, facials and massage by appointment or walk-in.',
+  address: 'Broad Street, Sinkor',
+  city: 'Monrovia',
+  country: 'Liberia',
+  phone: '0775550124',
+  email: 'hello@monroviabeauty.example',
+  website: 'https://monroviabeauty.example',
+  timezone: 'Africa/Monrovia',
+  currency: 'LRD',
   hours_json: j(hours),
   comms_json: j({
     preferredChannel: 'WHATSAPP',
@@ -245,7 +245,7 @@ insert('businesses', {
     autoReply: true,
     sendAppointmentReminders: true,
     reminderLeadHours: 24,
-    notes: 'Confirm every booking on WhatsApp the day before.',
+    notes: 'Confirm every booking on WhatsApp the day before. Most clients pay with mobile money.',
   }),
   onboarding_step: 10,
   onboarding_completed_at: daysAgo(21),
@@ -276,7 +276,7 @@ const staffIds = [
     const id = nid('stf');
     insert('staff', {
       id, business_id: businessId, user_id: managerUserId, name: 'Ndapewa Amutenya', title: 'Salon manager',
-      email: MANAGER_EMAIL, phone: '0812345678', specialties: j(['Braids', 'Colour', 'Customer care']),
+      email: MANAGER_EMAIL, phone: '0775112345', specialties: j(['Braids', 'Colour', 'Customer care']),
       availability_json: staffWindows, color: '#3382fb', active: 1, created_at: daysAgo(28), updated_at: nowIso,
     });
     return id;
@@ -285,7 +285,7 @@ const staffIds = [
     const id = nid('stf');
     insert('staff', {
       id, business_id: businessId, user_id: staffUserId, name: 'Teresia Shikongo', title: 'Senior stylist',
-      email: STAFF_EMAIL, phone: '0819876543', specialties: j(['Gel nails', 'Facials', 'Massage']),
+      email: STAFF_EMAIL, phone: '0886987654', specialties: j(['Gel nails', 'Facials', 'Massage']),
       availability_json: staffWindows, color: '#7c3aed', active: 1, created_at: daysAgo(24), updated_at: nowIso,
     });
     return id;
@@ -294,12 +294,12 @@ const staffIds = [
 
 // --- Services -------------------------------------------------------------
 const services = [
-  { name: 'Box braids', category: 'Braids', price: 35000, minutes: 180, description: 'Knotless box braids, includes wash and treatment.' },
-  { name: 'Gel manicure', category: 'Nails', price: 22000, minutes: 60, description: 'Shape, cuticle care, gel colour and hardening.' },
-  { name: 'Deep tissue massage', category: 'Massage', price: 48000, minutes: 90, description: 'Full-body deep tissue massage with hot towels.' },
-  { name: 'Kids haircut', category: 'Hair', price: 12000, minutes: 30, description: 'Wash and cut for children under 12.' },
-  { name: 'Signature facial', category: 'Skin', price: 55000, minutes: 75, description: 'Cleanse, exfoliate, mask and moisturise for all skin types.' },
-  { name: 'Wash, cut & blow-dry', category: 'Hair', price: 28000, minutes: 60, description: 'Classic cut finished with a blow-dry and style.' },
+  { name: 'Box braids', category: 'Braids', price: 180000, minutes: 180, description: 'Knotless box braids, includes wash and treatment.' },
+  { name: 'Gel manicure', category: 'Nails', price: 120000, minutes: 60, description: 'Shape, cuticle care, gel colour and hardening.' },
+  { name: 'Deep tissue massage', category: 'Massage', price: 250000, minutes: 90, description: 'Full-body deep tissue massage with hot towels.' },
+  { name: 'Kids haircut', category: 'Hair', price: 70000, minutes: 30, description: 'Wash and cut for children under 12.' },
+  { name: 'Signature facial', category: 'Skin', price: 280000, minutes: 75, description: 'Cleanse, exfoliate, mask and moisturise for all skin types.' },
+  { name: 'Wash, cut & blow-dry', category: 'Hair', price: 140000, minutes: 60, description: 'Classic cut finished with a blow-dry and style.' },
 ].map((service) => {
   const id = nid('svc');
   insert('services', {
@@ -312,12 +312,12 @@ const services = [
 
 // --- Products -------------------------------------------------------------
 const products = [
-  { name: 'Argan oil treatment 100ml', sku: 'ARG-100', category: 'Hair care', quantity: 3, cost: 9500, price: 18500, supplier: 'Namib Beauty Supply', min: 8 },
-  { name: 'Sulphate-free shampoo 500ml', sku: 'SHM-500', category: 'Hair care', quantity: 24, cost: 6200, price: 12900, supplier: 'Namib Beauty Supply', min: 10 },
-  { name: 'Gel polish set (12 colours)', sku: 'GEL-12', category: 'Nails', quantity: 6, cost: 21000, price: 39500, supplier: 'Cape Nail Co', min: 4 },
-  { name: 'Hair extensions bundle 18"', sku: 'EXT-18', category: 'Hair', quantity: 11, cost: 48000, price: 89000, supplier: 'Cape Nail Co', min: 5 },
-  { name: 'Hydrating face mask (single)', sku: 'MSK-01', category: 'Skin', quantity: 40, cost: 4200, price: 9500, supplier: 'Derma Windhoek', min: 15 },
-  { name: 'Scalp massage brush', sku: 'BRH-01', category: 'Tools', quantity: 2, cost: 3500, price: 7900, supplier: 'Namib Beauty Supply', min: 6 },
+  { name: 'Argan oil treatment 100ml', sku: 'ARG-100', category: 'Hair care', quantity: 3, cost: 95000, price: 185000, supplier: 'Monrovia Beauty Supply', min: 8 },
+  { name: 'Sulphate-free shampoo 500ml', sku: 'SHM-500', category: 'Hair care', quantity: 24, cost: 62000, price: 129000, supplier: 'Monrovia Beauty Supply', min: 10 },
+  { name: 'Gel polish set (12 colours)', sku: 'GEL-12', category: 'Nails', quantity: 6, cost: 210000, price: 395000, supplier: 'West Africa Nail Co', min: 4 },
+  { name: 'Hair extensions bundle 18"', sku: 'EXT-18', category: 'Hair', quantity: 11, cost: 480000, price: 890000, supplier: 'West Africa Nail Co', min: 5 },
+  { name: 'Hydrating face mask (single)', sku: 'MSK-01', category: 'Skin', quantity: 40, cost: 42000, price: 95000, supplier: 'Derma Monrovia', min: 15 },
+  { name: 'Scalp massage brush', sku: 'BRH-01', category: 'Tools', quantity: 2, cost: 35000, price: 79000, supplier: 'Monrovia Beauty Supply', min: 6 },
 ].map((product) => {
   const id = nid('prd');
   insert('products', {
@@ -335,19 +335,19 @@ const products = [
 
 // --- Customers ------------------------------------------------------------
 const customers = [
-  { name: 'Selma Nangolo', phone: '0811122334', email: 'selma@example.com', status: 'RETURNING', source: 'WALK_IN', spend: 96500, orders: 4, appointments: 6, tags: ['loyal', 'braids'], days: 2 },
-  { name: 'Johannes Petrus', phone: '0812233445', email: 'johannes@example.com', status: 'VIP', source: 'REFERRAL', spend: 248000, orders: 9, appointments: 12, tags: ['vip', 'massage'], days: 1 },
-  { name: 'Lucia Haihambo', phone: '0813344556', email: 'lucia@example.com', status: 'ACTIVE', source: 'INSTAGRAM', spend: 42000, orders: 2, appointments: 3, tags: ['nails'], days: 5 },
-  { name: 'Maria Kandjii', phone: '0814455667', email: 'maria@example.com', status: 'LEAD', source: 'WEBSITE', spend: 0, orders: 0, appointments: 0, tags: ['quote sent'], days: 1 },
-  { name: 'Tangeni Iipumbu', phone: '0815566778', email: 'tangeni@example.com', status: 'NEW', source: 'PUBLIC_BOOKING', spend: 12000, orders: 0, appointments: 1, tags: ['first visit'], days: 0 },
-  { name: 'Frieda Beukes', phone: '0816677889', email: 'frieda@example.com', status: 'INACTIVE', source: 'WALK_IN', spend: 28500, orders: 1, appointments: 2, tags: ['win-back'], days: 96 },
-  { name: 'Elmarie Swart', phone: '0817788990', email: 'elmarie@example.com', status: 'ACTIVE', source: 'WHATSAPP', spend: 61500, orders: 3, appointments: 4, tags: ['facials'], days: 3 },
-  { name: 'Kandali Nghidinwa', phone: '0818899001', email: 'kandali@example.com', status: 'RETURNING', source: 'WALK_IN', spend: 132000, orders: 5, appointments: 7, tags: ['hair', 'colour'], days: 6 },
+  { name: 'Mariama Kamara', phone: '0775112201', email: 'mariama@example.com', status: 'RETURNING', source: 'WALK_IN', spend: 965000, orders: 4, appointments: 6, tags: ['loyal', 'braids'], days: 2 },
+  { name: 'Joseph Boley', phone: '0886223302', email: 'joseph@example.com', status: 'VIP', source: 'REFERRAL', spend: 2480000, orders: 9, appointments: 12, tags: ['vip', 'massage'], days: 1 },
+  { name: 'Grace Wleh', phone: '0777334403', email: 'grace@example.com', status: 'ACTIVE', source: 'INSTAGRAM', spend: 420000, orders: 2, appointments: 3, tags: ['nails'], days: 5 },
+  { name: 'Fatu Dukuly', phone: '0551445504', email: 'fatu@example.com', status: 'LEAD', source: 'WEBSITE', spend: 0, orders: 0, appointments: 0, tags: ['quote sent'], days: 1 },
+  { name: 'Prince Nyemah', phone: '0773446605', email: 'prince@example.com', status: 'NEW', source: 'PUBLIC_BOOKING', spend: 70000, orders: 0, appointments: 1, tags: ['first visit'], days: 0 },
+  { name: 'Comfort Toe', phone: '0881557706', email: 'comfort@example.com', status: 'INACTIVE', source: 'WALK_IN', spend: 285000, orders: 1, appointments: 2, tags: ['win-back'], days: 96 },
+  { name: 'Aminata Sow', phone: '0778668807', email: 'aminata@example.com', status: 'ACTIVE', source: 'WHATSAPP', spend: 615000, orders: 3, appointments: 4, tags: ['facials'], days: 3 },
+  { name: 'Emmanuel Dolo', phone: '0551779908', email: 'emmanuel@example.com', status: 'RETURNING', source: 'WALK_IN', spend: 1320000, orders: 5, appointments: 7, tags: ['hair', 'colour'], days: 6 },
 ].map((customer) => {
   const id = nid('cus');
   insert('customers', {
     id, business_id: businessId, name: customer.name, phone: customer.phone, email: customer.email,
-    address: 'Windhoek', status: customer.status, source: customer.source, tags_json: j(customer.tags),
+    address: 'Monrovia', status: customer.status, source: customer.source, tags_json: j(customer.tags),
     notes: `${customer.name} prefers ${customer.source.toLowerCase().replace('_', ' ')} contact.`,
     total_spend_cents: customer.spend, order_count: customer.orders, appointment_count: customer.appointments,
     last_interaction_at: daysAgo(customer.days, 11), created_at: daysAgo(customer.days + 20), updated_at: nowIso,
@@ -357,19 +357,19 @@ const customers = [
 
 // --- Leads ----------------------------------------------------------------
 const leadStages = [
-  { name: 'Maria Kandjii', stage: 'NEW_LEAD', value: 65000, score: 62, source: 'WEBSITE', reason: 'Asked about bridal package pricing', followUp: 1, customerIndex: 3 },
-  { name: 'Ester Amupolo', stage: 'CONTACTED', value: 180000, score: 74, source: 'REFERRAL', reason: 'Corporate wellness day for 15 staff', followUp: 2, customerIndex: null },
-  { name: 'Ndapewa Ndekela', stage: 'QUALIFIED', value: 95000, score: 81, source: 'INSTAGRAM', reason: 'Monthly braids retainer, budget confirmed', followUp: 3, customerIndex: null },
-  { name: 'Gerson Uusiku', stage: 'PROPOSAL', value: 320000, score: 88, source: 'PHONE', reason: 'Quote sent for weekly grooming service', followUp: 4, customerIndex: null },
-  { name: 'Hilma Shikongo', stage: 'NEGOTIATION', value: 240000, score: 91, source: 'WHATSAPP', reason: 'Negotiating package discount for 6 months', followUp: 5, customerIndex: null },
-  { name: 'Sakeus Ndemuweda', stage: 'WON', value: 145000, score: 96, source: 'REFERRAL', reason: 'Signed 12-month grooming contract', followUp: null, customerIndex: null },
-  { name: 'Petrina Goagoses', stage: 'LOST', value: 70000, score: 38, source: 'WEBSITE', reason: 'Chose a cheaper competitor this time', followUp: null, customerIndex: null },
+  { name: 'Fatu Dukuly', stage: 'NEW_LEAD', value: 650000, score: 62, source: 'WEBSITE', reason: 'Asked about bridal package pricing', followUp: 1, customerIndex: 3 },
+  { name: 'Amelia Kromah', stage: 'CONTACTED', value: 1800000, score: 74, source: 'REFERRAL', reason: 'Corporate wellness day for 15 staff', followUp: 2, customerIndex: null },
+  { name: 'Hawa Sirleaf', stage: 'QUALIFIED', value: 950000, score: 81, source: 'INSTAGRAM', reason: 'Monthly braids retainer, budget confirmed', followUp: 3, customerIndex: null },
+  { name: 'Alfred Neufville', stage: 'PROPOSAL', value: 3200000, score: 88, source: 'PHONE', reason: 'Quote sent for weekly grooming service', followUp: 4, customerIndex: null },
+  { name: 'Ruth Gbessagee', stage: 'NEGOTIATION', value: 2400000, score: 91, source: 'WHATSAPP', reason: 'Negotiating package discount for 6 months', followUp: 5, customerIndex: null },
+  { name: 'Daniel Seakor', stage: 'WON', value: 1450000, score: 96, source: 'REFERRAL', reason: 'Signed 12-month grooming contract', followUp: null, customerIndex: null },
+  { name: 'Vivian Tarr', stage: 'LOST', value: 700000, score: 38, source: 'WEBSITE', reason: 'Chose a cheaper competitor this time', followUp: null, customerIndex: null },
 ];
 for (const lead of leadStages) {
   const id = nid('led');
   insert('leads', {
     id, business_id: businessId, customer_id: lead.customerIndex === null ? null : customers[lead.customerIndex].id,
-    name: lead.name, phone: '0819000123', email: `${lead.name.split(' ')[0].toLowerCase()}@example.com`,
+    name: lead.name, phone: '0770190023', email: `${lead.name.split(' ')[0].toLowerCase()}@example.com`,
     source: lead.source, stage: lead.stage, value_cents: lead.value, score: lead.score, score_reason: lead.reason,
     owner_user_id: ownerId, notes: `AI lead score ${lead.score}/100 — ${lead.reason}`,
     last_contacted_at: lead.followUp === null ? daysAgo(9) : daysAgo(lead.followUp, 10),
@@ -405,7 +405,7 @@ orderPlan.forEach((plan, index) => {
     return { type: 'PRODUCT', itemId: product.id, name: product.name, quantity, unit: product.price };
   });
   const subtotal = lines.reduce((sum, line) => sum + line.unit * line.quantity, 0);
-  const tax = Math.round(subtotal * 0.15);
+  const tax = Math.round(subtotal * 0.10);
   const total = subtotal + tax;
   const placedAt = daysAgo(plan.days, 11 + index);
   insert('orders', {
@@ -455,10 +455,10 @@ for (const plan of appointmentPlan) {
 
 // --- Tasks ----------------------------------------------------------------
 const taskPlan = [
-  { title: 'Call Ester about the corporate wellness day', status: 'TODO', priority: 'HIGH', due: daysAhead(1, 12), assignee: managerUserId, source: 'AI_RECOMMENDATION', related: 'LEAD' },
+  { title: 'Call Amelia about the corporate wellness day', status: 'TODO', priority: 'HIGH', due: daysAhead(1, 12), assignee: managerUserId, source: 'AI_RECOMMENDATION', related: 'LEAD' },
   { title: 'Reorder argan oil and scalp brushes', status: 'TODO', priority: 'URGENT', due: daysAhead(0, 16), assignee: ownerId, source: 'AI_RECOMMENDATION', related: 'PRODUCT' },
   { title: 'Publish the spring promotion on Instagram', status: 'IN_PROGRESS', priority: 'MEDIUM', due: daysAhead(2, 10), assignee: managerUserId, source: 'MANUAL', related: 'CAMPAIGN' },
-  { title: 'Follow up with Frieda Beukes (win-back)', status: 'TODO', priority: 'HIGH', due: daysAhead(3, 11), assignee: staffUserId, source: 'AI_RECOMMENDATION', related: 'CUSTOMER' },
+  { title: 'Follow up with Comfort Toe (win-back)', status: 'TODO', priority: 'HIGH', due: daysAhead(3, 11), assignee: staffUserId, source: 'AI_RECOMMENDATION', related: 'CUSTOMER' },
   { title: 'Update the price list PDF for the knowledge base', status: 'COMPLETED', priority: 'LOW', due: daysAgo(3, 17), assignee: ownerId, source: 'MANUAL', related: null },
   { title: 'Confirm Saturday bookings on WhatsApp', status: 'TODO', priority: 'MEDIUM', due: daysAhead(1, 9), assignee: managerUserId, source: 'MANUAL', related: 'APPOINTMENT' },
 ];
@@ -474,7 +474,7 @@ for (const task of taskPlan) {
 // --- Knowledge base: support settings, documents, FAQs, source chunks ------
 insert('support_settings', {
   id: nid('sup'), business_id: businessId,
-  greeting: 'Hi! Welcome to Windhoek Beauty Studio. Ask me about services, prices, opening hours or booking.',
+  greeting: 'Hi! Welcome to Monrovia Beauty Studio. Ask me about services, prices, opening hours or booking.',
   tone: 'friendly-professional',
   escalation_message: 'I want to make sure you get an accurate answer, so I have asked a member of our team to help you directly.',
   handoff_email: MANAGER_EMAIL,
@@ -483,7 +483,7 @@ insert('support_settings', {
 });
 
 const policyText = [
-  'WINDHOEK BEAUTY STUDIO — SERVICE POLICY',
+  'MONROVIA BEAUTY STUDIO — SERVICE POLICY',
   '',
   'Opening hours: Monday to Wednesday 09:00-18:00, Thursday 09:00-19:00, Friday 08:00-19:00, Saturday 08:00-16:00. Closed on Sundays.',
   '',
@@ -491,7 +491,7 @@ const policyText = [
   '',
   'Deposits: braiding, colour and extension services require a 30% deposit to hold the slot. Deposits are credited to the final invoice.',
   '',
-  'Payment: we accept cash, card and EFT. Retail products can be paid for in the studio or online. Invoices are issued for every service and are payable within 7 days.',
+  'Payment: we accept cash, mobile money (MTN MoMo or Orange Money) and bank transfer. Retail products can be paid for in the studio or online. Invoices are issued for every service and are payable within 7 days.',
   '',
   'Refunds: retail products can be returned unopened within 14 days with the receipt. Services are non-refundable, but we will happily correct any work you are unhappy with within 7 days.',
   '',
@@ -505,14 +505,14 @@ insert('knowledge_sources', {
   status: 'READY', chunk_count: 0, created_by_id: ownerId, created_at: daysAgo(25), updated_at: daysAgo(25),
 });
 const priceText = [
-  'PRICE LIST (all prices in Namibian dollars, VAT included)',
+  'PRICE LIST (all prices in Liberian dollars)',
   '',
-  'Box braids — N$350 (180 minutes). Knotless box braids including wash and treatment.',
-  'Gel manicure — N$220 (60 minutes). Shape, cuticle care, gel colour and hardening.',
-  'Deep tissue massage — N$480 (90 minutes). Full-body deep tissue massage with hot towels.',
-  'Kids haircut — N$120 (30 minutes). Wash and cut for children under 12.',
-  'Signature facial — N$550 (75 minutes). Cleanse, exfoliate, mask and moisturise for all skin types.',
-  'Wash, cut & blow-dry — N$280 (60 minutes). Classic cut finished with a blow-dry and style.',
+  'Box braids — L$1,800 (180 minutes). Knotless box braids including wash and treatment.',
+  'Gel manicure — L$1,200 (60 minutes). Shape, cuticle care, gel colour and hardening.',
+  'Deep tissue massage — L$2,500 (90 minutes). Full-body deep tissue massage with hot towels.',
+  'Kids haircut — L$700 (30 minutes). Wash and cut for children under 12.',
+  'Signature facial — L$2,800 (75 minutes). Cleanse, exfoliate, mask and moisturise for all skin types.',
+  'Wash, cut & blow-dry — L$1,400 (60 minutes). Classic cut finished with a blow-dry and style.',
 ].join('\n');
 const priceSourceId = nid('ksc');
 insert('knowledge_sources', {
@@ -543,10 +543,10 @@ db.prepare('UPDATE knowledge_sources SET chunk_count = ? WHERE id = ?').run(pric
 
 const faqs = [
   ['Do you take walk-ins?', 'Yes — walk-ins are welcome before 11:00 and after 15:00, subject to availability. Weekends fill up fast, so booking is recommended.'],
-  ['How much are box braids?', 'Box braids are N$350 and take about 180 minutes, including a wash and treatment. A 30% deposit holds your slot.'],
+  ['How much are box braids?', 'Box braids are L$1,800 and take about 180 minutes, including a wash and treatment. A 30% deposit holds your slot.'],
   ['Can I cancel or reschedule?', 'Yes. Please cancel or reschedule at least 12 hours before your appointment so we can offer the slot to someone else. Late cancellations may be charged 50%.'],
-  ['Which payment methods do you accept?', 'Cash, card and EFT. Invoices are payable within 7 days.'],
-  ['Do you sell hair and nail products?', 'Yes — shampoo, argan oil, gel polish sets, extensions and face masks are available in the studio, and we can deliver in Windhoek.'],
+  ['Which payment methods do you accept?', 'Cash, mobile money (MTN MoMo or Orange Money) and bank transfer. Invoices are payable within 7 days.'],
+  ['Do you sell hair and nail products?', 'Yes — shampoo, argan oil, gel polish sets, extensions and face masks are available in the studio, and we can deliver in Monrovia.'],
   ['Are your products safe for sensitive skin?', 'We use hypoallergenic products for facials and can patch-test before any treatment. Please tell us about allergies when you book.'],
 ];
 for (const [question, answer] of faqs) {
@@ -559,7 +559,7 @@ for (const [question, answer] of faqs) {
 // --- Conversations, tickets ----------------------------------------------
 const conversationPlan = [
   {
-    contact: 'Selma Nangolo', email: 'selma@example.com', phone: '0811122334', subject: 'Braids pricing and availability',
+    contact: 'Mariama Kamara', email: 'mariama@example.com', phone: '0775112201', subject: 'Braids pricing and availability',
     status: 'OPEN', needsHuman: 0, unread: 1, customerIndex: 0,
     messages: [
       { sender: 'CUSTOMER', body: 'How much are knotless box braids and do you have a slot on Saturday?', grounded: null },
@@ -567,7 +567,7 @@ const conversationPlan = [
     ],
   },
   {
-    contact: 'Frieda Beukes', email: 'frieda@example.com', phone: '0816677889', subject: 'Complaint about gift voucher',
+    contact: 'Comfort Toe', email: 'comfort@example.com', phone: '0881557706', subject: 'Complaint about gift voucher',
     status: 'ESCALATED', needsHuman: 1, unread: 1, customerIndex: 5,
     messages: [
       { sender: 'CUSTOMER', body: 'My gift voucher expired last week and I never got a reminder. I want it honoured.', grounded: null },
@@ -575,7 +575,7 @@ const conversationPlan = [
     ],
   },
   {
-    contact: 'Elmarie Swart', email: 'elmarie@example.com', phone: '0817788990', subject: 'Facial for sensitive skin',
+    contact: 'Aminata Sow', email: 'aminata@example.com', phone: '0778668807', subject: 'Facial for sensitive skin',
     status: 'PENDING', needsHuman: 1, unread: 0, customerIndex: 6,
     messages: [
       { sender: 'CUSTOMER', body: 'Do you have a facial that is safe for rosacea?', grounded: null },
@@ -607,7 +607,7 @@ insert('support_tickets', {
   subject: 'Gift voucher expired without reminder', description: 'Customer wants the expired voucher honoured. Manager to approve an extension.',
   status: 'OPEN', priority: 'HIGH', escalated_from_ai: 1,
   escalation_reason: 'Customer is unhappy and the policy does not cover goodwill gestures.',
-  contact_name: 'Frieda Beukes', contact_email: 'frieda@example.com', contact_phone: '0816677889',
+  contact_name: 'Comfort Toe', contact_email: 'comfort@example.com', contact_phone: '0881557706',
   assigned_to_id: managerUserId, resolved_at: null, created_at: daysAgo(1, 13), updated_at: daysAgo(1, 13),
 });
 
@@ -617,13 +617,13 @@ insert('documents', {
   title: 'Invoice — box braids and argan oil', customer_id: customers[0].id, status: 'SENT',
   content_json: j({
     sections: [
-      { heading: 'Summary', body: 'Box braids (N$350) and argan oil treatment 100ml (N$185) supplied on account.' },
-      { heading: 'Amount due', body: 'Total: N$615 including VAT.' },
+      { heading: 'Summary', body: 'Box braids (L$1,800) and argan oil treatment 100ml (L$1,850) supplied on account.' },
+      { heading: 'Amount due', body: 'Total: L$4,015 including tax.' },
       { heading: 'Payment terms', body: 'Payment is due within 7 days. Please reference INV-0001 when paying.' },
     ],
   }),
-  content_text: 'Invoice INV-0001 — box braids and argan oil. Total N$615.',
-  total_cents: 61500, currency: 'NAD', source: 'MANUAL', issued_at: daysAgo(3), due_at: daysAhead(4),
+  content_text: 'Invoice INV-0001 — box braids and argan oil. Total L$4,015.',
+  total_cents: 401500, currency: 'LRD', source: 'MANUAL', issued_at: daysAgo(3), due_at: daysAhead(4),
   created_by_id: ownerId, created_at: daysAgo(3), updated_at: daysAgo(3),
 });
 insert('documents', {
@@ -637,7 +637,7 @@ insert('documents', {
     ],
   }),
   content_text: 'Opening and closing checklist for the studio.',
-  total_cents: 0, currency: 'NAD', source: 'AI', issued_at: daysAgo(10), due_at: null,
+  total_cents: 0, currency: 'LRD', source: 'AI', issued_at: daysAgo(10), due_at: null,
   created_by_id: ownerId, created_at: daysAgo(10), updated_at: daysAgo(10),
 });
 
@@ -645,7 +645,7 @@ const campaignId = nid('cmp');
 insert('marketing_campaigns', {
   id: campaignId, business_id: businessId, name: 'October self-care promotion',
   objective: 'Fill quiet Tuesday and Wednesday slots with a 15% self-care bundle.',
-  audience: 'Existing clients in Windhoek who visited in the last 90 days',
+  audience: 'Existing clients in Monrovia who visited in the last 90 days',
   channels_json: j(['INSTAGRAM', 'FACEBOOK', 'WHATSAPP', 'EMAIL']),
   status: 'APPROVED', start_date: daysAhead(1).slice(0, 10), end_date: daysAhead(21).slice(0, 10),
   created_by_id: ownerId, created_at: daysAgo(5), updated_at: daysAgo(2),
@@ -653,7 +653,7 @@ insert('marketing_campaigns', {
 insert('marketing_posts', {
   id: nid('pst'), business_id: businessId, campaign_id: campaignId, channel: 'INSTAGRAM',
   title: 'Self-care Tuesday', body: 'Mid-week reset: 15% off our signature facial and gel manicure bundle every Tuesday and Wednesday this month. Booking link in bio — limited slots.',
-  hashtags: '#WindhoekBeauty #SelfCare #NailTech #Facial', status: 'APPROVED', scheduled_at: daysAhead(1, 8),
+  hashtags: '#MonroviaBeauty #SelfCare #NailTech #Facial', status: 'APPROVED', scheduled_at: daysAhead(1, 8),
   published_at: null, approved_by_id: ownerId, created_by_id: ownerId, created_at: daysAgo(5), updated_at: daysAgo(2),
 });
 insert('marketing_posts', {
@@ -671,13 +671,13 @@ insert('marketing_posts', {
 
 insert('reports', {
   id: nid('rpt'), business_id: businessId, period: 'WEEKLY', period_start: daysAgo(7), period_end: nowIso,
-  title: 'Windhoek Beauty Studio — weekly performance recap',
+  title: 'Monrovia Beauty Studio — weekly performance recap',
   metrics_json: j({
-    revenueCents: 118700, revenueChangePct: 12.4, orders: 5, averageOrderCents: 23740,
+    revenueCents: 1187000, revenueChangePct: 12.4, orders: 5, averageOrderCents: 237400,
     newCustomers: 2, totalCustomers: 8, appointments: { total: 8, completed: 2, cancelled: 1 },
-    topItems: [{ name: 'Box braids', units: 1, revenueCents: 35000 }, { name: 'Deep tissue massage', units: 1, revenueCents: 48000 }],
+    topItems: [{ name: 'Box braids', units: 1, revenueCents: 180000 }, { name: 'Deep tissue massage', units: 1, revenueCents: 250000 }],
     lowStock: [{ name: 'Argan oil treatment 100ml', quantity: 3, minStock: 8 }],
-    leads: [{ stage: 'QUALIFIED', count: 1, valueCents: 95000 }],
+    leads: [{ stage: 'QUALIFIED', count: 1, valueCents: 950000 }],
     support: { openConversations: 2, openTickets: 1 },
   }),
   ai_summary: 'Revenue is up 12,4% week on week, driven by massage and braiding services. Two retail items are below minimum stock, so reorder before the weekend. Follow up with the qualified corporate lead and publish the approved self-care promotion.',
@@ -693,7 +693,7 @@ insert('ai_runs', {
 });
 insert('ai_runs', {
   id: nid('air'), business_id: businessId, user_id: null, surface: 'SUPPORT',
-  prompt: 'How much are box braids?', response: 'Box braids are N$350 and take about 180 minutes, including a wash and treatment.',
+  prompt: 'How much are box braids?', response: 'Box braids are L$1,800 and take about 180 minutes, including a wash and treatment.',
   provider: 'builtin-knowledge', model: null, sources_json: j([{ title: 'Price list 2026', kind: 'BUSINESS_DOCUMENT' }]),
   grounded: 1, tokens_in: 0, tokens_out: 0, latency_ms: 18, created_at: daysAgo(2, 14),
 });
@@ -711,9 +711,9 @@ for (const [metric, quantity] of [['AI_MESSAGES', 3], ['SUPPORT_MESSAGES', 9], [
 }
 
 const notifications = [
-  ['NEW_APPOINTMENT', 'New booking from the public page', 'Tangeni Iipumbu booked Gel manicure for today at 14:00.', 'INFO', 'APPOINTMENT', '/dashboard/appointments', 0],
+  ['NEW_APPOINTMENT', 'New booking from the public page', 'Prince Nyemah booked Gel manicure for today at 14:00.', 'INFO', 'APPOINTMENT', '/dashboard/appointments', 0],
   ['LOW_INVENTORY', '2 products at or below minimum stock', 'Argan oil treatment 100ml (3 left) and scalp massage brush (2 left) need reordering.', 'WARNING', 'PRODUCT', '/dashboard/inventory', 0],
-  ['SUPPORT_ESCALATION', 'Support escalation needs a human reply', 'Frieda Beukes disputed an expired gift voucher — ticket is open.', 'CRITICAL', 'TICKET', '/dashboard/support', 0],
+  ['SUPPORT_ESCALATION', 'Support escalation needs a human reply', 'Comfort Toe disputed an expired gift voucher — ticket is open.', 'CRITICAL', 'TICKET', '/dashboard/support', 0],
   ['TASK_DUE', 'Task due today', 'Reorder argan oil and scalp brushes is due today.', 'INFO', 'TASK', '/dashboard/tasks', 1],
 ];
 for (const [type, title, body, level, entityType, href, read] of notifications) {
@@ -744,8 +744,8 @@ insert('subscriptions', {
 });
 
 insert('contact_messages', {
-  id: nid('ctm'), name: 'Martha Kavezeri', email: 'martha@example.com', phone: '0815551234',
-  company: 'Otjomuise Retail', topic: 'demo', message: 'We run two retail shops and want to try the appointments and AI support features.',
+  id: nid('ctm'), name: 'Martha Kollie', email: 'martha@example.com', phone: '0775551234',
+  company: 'Sinkor Retail Group', topic: 'demo', message: 'We run two retail shops and want to try the appointments and AI support features.',
   source: 'landing-contact', status: 'NEW', created_at: daysAgo(2, 15),
 });
 

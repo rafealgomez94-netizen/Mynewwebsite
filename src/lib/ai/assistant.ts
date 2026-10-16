@@ -164,7 +164,7 @@ function deterministicAnswer(
           ? tag(
               'VERIFIED_DATA',
               `Most booked services: ${facts.sales.popularServices
-                .map((service) => `${service.name} (${service.bookings} bookings, ${formatMoney(service.priceCents)})`)
+                .map((service) => `${service.name} (${service.bookings} bookings, ${formatMoney(service.priceCents, facts.currency)})`)
                 .join(', ')}.`,
             )
           : `[${GROUNDING_LABELS.INSUFFICIENT}] No service bookings have been recorded yet, so I cannot rank your services. Record bookings (or connect your calendar) and ask me again.`,
@@ -201,7 +201,7 @@ function deterministicAnswer(
           ? tag(
               'VERIFIED_DATA',
               `Best-selling items in the last 30 days: ${facts.sales.topItems
-                .map((item) => `${item.name} (${item.units} units, ${formatMoney(item.revenueCents)})`)
+                .map((item) => `${item.name} (${item.units} units, ${formatMoney(item.revenueCents, facts.currency)})`)
                 .join('; ')}.`,
             )
           : `[${GROUNDING_LABELS.INSUFFICIENT}] There are no orders recorded in the last 30 days, so I cannot determine best sellers yet.`,
@@ -245,7 +245,7 @@ function deterministicAnswer(
     case 'WEEKLY_REPORT':
       L.push(
         tag('VERIFIED_DATA', `Weekly report for ${businessName} (calculated from your stored data):`),
-        tag('VERIFIED_DATA', `• Revenue: ${formatMoney(facts.revenue.weekCents)} from ${facts.revenue.weekOrders} orders (${facts.revenue.weekChangePct >= 0 ? '+' : ''}${facts.revenue.weekChangePct.toFixed(1)}% week over week).`),
+        tag('VERIFIED_DATA', `• Revenue: ${formatMoney(facts.revenue.weekCents, facts.currency)} from ${facts.revenue.weekOrders} orders (${facts.revenue.weekChangePct >= 0 ? '+' : ''}${facts.revenue.weekChangePct.toFixed(1)}% week over week).`),
         tag('VERIFIED_DATA', `• Customers: ${facts.customers.newThisWeek} new, ${facts.customers.total} total.`),
         tag('VERIFIED_DATA', `• Appointments: ${facts.appointments.last7Days} in the past week, ${facts.appointments.next7Days} booked for the next 7 days.`),
         tag('VERIFIED_DATA', `• Leads: ${facts.leads.open} open, win rate ${facts.leads.conversionRatePct.toFixed(1)}%.`),
@@ -302,12 +302,12 @@ function deterministicAnswer(
       break;
     case 'REVENUE':
       L.push(
-        tag('VERIFIED_DATA', `Last 7 days: ${formatMoney(facts.revenue.weekCents)} from ${facts.revenue.weekOrders} orders (${facts.revenue.weekChangePct >= 0 ? '+' : ''}${facts.revenue.weekChangePct.toFixed(1)}% vs the previous week).`),
-        tag('VERIFIED_DATA', `Last 30 days: ${formatMoney(facts.revenue.monthCents)} from ${facts.revenue.monthOrders} orders, average order value ${formatMoney(facts.revenue.monthAverageCents)}.`),
+        tag('VERIFIED_DATA', `Last 7 days: ${formatMoney(facts.revenue.weekCents, facts.currency)} from ${facts.revenue.weekOrders} orders (${facts.revenue.weekChangePct >= 0 ? '+' : ''}${facts.revenue.weekChangePct.toFixed(1)}% vs the previous week).`),
+        tag('VERIFIED_DATA', `Last 30 days: ${formatMoney(facts.revenue.monthCents, facts.currency)} from ${facts.revenue.monthOrders} orders, average order value ${formatMoney(facts.revenue.monthAverageCents, facts.currency)}.`),
       );
       if (facts.sales.channels.length) {
         L.push(
-          tag('VERIFIED_DATA', `Channels (30d): ${facts.sales.channels.map((channel) => `${channel.channel} ${formatMoney(channel.revenueCents)}`).join(', ')}.`),
+          tag('VERIFIED_DATA', `Channels (30d): ${facts.sales.channels.map((channel) => `${channel.channel} ${formatMoney(channel.revenueCents, facts.currency)}`).join(', ')}.`),
         );
       }
       L.push(tag('AI_RECOMMENDATION', facts.revenue.weekChangePct < 0 ? 'Revenue softened — a re-engagement campaign to returning customers is the fastest lever.' : 'Revenue is trending up; protect the momentum with a loyalty offer for repeat buyers.'));
@@ -347,7 +347,7 @@ function deterministicAnswer(
         // built-in intent — answer from the document instead of a generic snapshot.
         L.push(fromDocuments);
         L.push(
-          tag('VERIFIED_DATA', `For context: ${formatNumber(facts.customers.total)} customers on file, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.inventory.lowStockCount} product(s) low on stock.`),
+          tag('VERIFIED_DATA', `For context: ${formatNumber(facts.customers.total)} customers on file, ${formatMoney(facts.revenue.monthCents, facts.currency)} revenue in the last 30 days, ${facts.inventory.lowStockCount} product(s) low on stock.`),
         );
         L.push(
           tag('AI_RECOMMENDATION', 'Quoted straight from your uploaded document. If the wording has changed, update the document so every answer stays accurate.'),
@@ -363,7 +363,7 @@ function deterministicAnswer(
         L.push(
           tag(
             'VERIFIED_DATA',
-            `What I can confirm about ${businessName} instead: ${formatNumber(facts.customers.total)} customers, ${formatMoney(facts.revenue.monthCents)} revenue in the last 30 days, ${facts.appointments.next7Days} upcoming appointments, ${facts.inventory.lowStockCount} product(s) low on stock.`,
+            `What I can confirm about ${businessName} instead: ${formatNumber(facts.customers.total)} customers, ${formatMoney(facts.revenue.monthCents, facts.currency)} revenue in the last 30 days, ${facts.appointments.next7Days} upcoming appointments, ${facts.inventory.lowStockCount} product(s) low on stock.`,
           ),
         );
       }

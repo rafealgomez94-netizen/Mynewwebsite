@@ -197,7 +197,7 @@ export function SettingsWorkspace({
               <Input value={profileForm.jobTitle} onChange={(event) => setProfileForm({ ...profileForm, jobTitle: event.target.value })} />
             </Field>
             <Field label="Timezone">
-              <Input value={profileForm.timezone} onChange={(event) => setProfileForm({ ...profileForm, timezone: event.target.value })} placeholder="Africa/Windhoek" />
+              <Input value={profileForm.timezone} onChange={(event) => setProfileForm({ ...profileForm, timezone: event.target.value })} placeholder="Africa/Monrovia" />
             </Field>
             <Field label="Avatar URL">
               <Input value={profileForm.avatarUrl} onChange={(event) => setProfileForm({ ...profileForm, avatarUrl: event.target.value })} placeholder="https://…" />

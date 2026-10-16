@@ -296,10 +296,11 @@ export type Channel = (typeof CHANNELS)[number];
 
 /**
  * Country dial code applied when the configured WhatsApp number is written in
- * national form (leading 0). Override with NEXT_PUBLIC_SUPPORT_DIAL_CODE — e.g.
- * 264 for Namibia, 27 for South Africa, 44 for the United Kingdom.
+ * national form (leading 0). Defaults to 231 (Liberia); override with
+ * NEXT_PUBLIC_SUPPORT_DIAL_CODE — 232 Sierra Leone, 233 Ghana, 234 Nigeria,
+ * 225 Cote d'Ivoire, 227 Niger, 228 Togo, 229 Benin, 220 Gambia.
  */
-const WHATSAPP_DIAL_CODE = (process.env.NEXT_PUBLIC_SUPPORT_DIAL_CODE || '264').replace(/\D/g, '');
+const WHATSAPP_DIAL_CODE = (process.env.NEXT_PUBLIC_SUPPORT_DIAL_CODE || '231').replace(/\D/g, '');
 
 /** International (E.164 without the plus) form of the support WhatsApp number. */
 function toInternational(raw: string): string {

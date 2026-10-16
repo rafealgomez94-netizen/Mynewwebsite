@@ -146,7 +146,7 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, RBAC and tenant isolation — **93 checks in total**. It creates its own
+billing, invitations, RBAC and tenant isolation — **95 checks in total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -194,7 +194,7 @@ To change the name, role or contact details shown on the card, edit `SUPPORT_*` 
 | Manager | `manager@test.local` | `ManagerPassw0rd!` | `/dashboard` |
 | Staff | `staff@test.local` | `StaffPassw0rd!` | `/dashboard` |
 
-The demo tenant is **Windhoek Beauty Studio** (`/book/windhoek-beauty-studio`, `/support/windhoek-beauty-studio`) with services, products, stock, customers, leads, orders, appointments, tasks, conversations, tickets, FAQs, knowledge chunks, documents, a marketing campaign, a weekly report and notifications. Change the passwords in `.env` before showing the app to anyone.
+The demo tenant is **Monrovia Beauty Studio**, a Liberian salon on Broad Street (`/book/monrovia-beauty-studio`, `/support/monrovia-beauty-studio`) with services, products, stock, customers, leads, orders, appointments, tasks, conversations, tickets, FAQs, knowledge chunks, documents, a marketing campaign, a weekly report and notifications. Change the passwords in `.env` before showing the app to anyone.
 
 ---
 
@@ -205,17 +205,40 @@ Everything is documented in `.env.example`. The important ones:
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_FILE` | SQLite file used by the development runtime (default `data/workspace-digital.db`) |
+| `DEFAULT_CURRENCY` | Currency a new workspace starts in when the client does not choose one (default `LRD`). Every workspace stores its own ISO currency, and all money — dashboard, AI answers, documents and report PDFs — is printed in it |
 | `DATABASE_URL` | PostgreSQL connection string when deploying with `db/schema.postgres.sql` |
 | `AUTH_SECRET` | Required in production — signs session material (`openssl rand -base64 48`) |
 | `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, `AI_MAX_OUTPUT_TOKENS`, `AI_TIMEOUT_MS` | Server-only AI provider. Empty key ⇒ built-in deterministic mode |
 | `SMTP_*` | Verification, reset, invitation and notification email. Missing ⇒ console transport |
 | `STORAGE_DRIVER`, `STORAGE_LOCAL_DIR`, `STORAGE_S3_*` | Knowledge-base document storage |
 | `PAYMENT_PROVIDER`, `PAYMENT_SECRET`, `STRIPE_*` | Billing. `manual` (default) applies a plan change immediately; `stripe` uses configured price IDs. No keys are ever hard-coded |
-| `NEXT_PUBLIC_SUPPORT_*` | Public contact details (email, phone, WhatsApp) shown in the footer, manager card and floating WhatsApp widget. `NEXT_PUBLIC_SUPPORT_DIAL_CODE` converts a nationally written WhatsApp number (`077…`) into international form (`wa.me/264774075285`) |
+| `NEXT_PUBLIC_SUPPORT_*` | Public contact details (email, phone, WhatsApp) shown in the footer, manager card and floating WhatsApp widget. `NEXT_PUBLIC_SUPPORT_DIAL_CODE` converts a nationally written WhatsApp number (`077…`) into international form (`wa.me/231774075285`, +231 = Liberia) |
 | `CRON_SECRET` | Guards the scheduler endpoints — `GET\|POST /api/cron/reminders` (appointment reminders) and `GET\|POST /api/cron/run` (reminders + task deadline alerts) — via a `?secret=` parameter or an `Authorization: Bearer` header (`openssl rand -hex 32`). Empty ⇒ they answer `503`; the per-workspace dashboard buttons are unaffected |
 | `SEED_*` | Emails/passwords created by `npm run db:seed` |
 
 Secrets are read on the server only. Nothing in `src/components` or any client bundle touches `process.env` values other than `NEXT_PUBLIC_*`.
+
+### Built for Liberia and West Africa, region-neutral underneath
+
+The platform is aimed at small and medium businesses in Liberia and the wider region, so the
+defaults point there and nothing assumes a European or American business:
+
+- Liberian dollars are the default currency for a new workspace (`DEFAULT_CURRENCY`), and the
+  onboarding wizard offers LRD, GHS, NGN, SLE, GMD, XOF and USD alongside the usual majors.
+- The WhatsApp contact number uses country dial code **231** (`NEXT_PUBLIC_SUPPORT_DIAL_CODE`),
+  so a nationally written `0774075285` becomes `wa.me/231774075285` in the footer, manager card,
+  floating widget and public booking/support pages.
+- The demo tenant is a Monrovia salon: `Africa/Monrovia` time zone, LRD prices (L$1,800 box
+  braids, L$1,200 gel manicure), mobile-money payment terms in its policy document, and the
+  seeded contact, marketing and reporting copy follows.
+
+Switching to this market exposed a real currency defect: the AI layer formatted money with
+`formatMoney(cents)` and no currency, which silently assumed USD — an LRD workspace answering
+"How much revenue did we make this week?" said **$16,544** when the figure was L$16,544 (about
+US$86). Every workspace currency is now carried through the fact pack (`facts.currency`), the
+analytics/insights layer, the assistant, generated reports and their PDFs, so the same question
+answers **LRD 16,544**. Documents already followed the workspace currency; this closes the rest.
+
 
 ---
 
@@ -286,7 +309,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **93 / 93 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **95 / 95 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -354,7 +377,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 - `POST /api/documents` silently dropped the `total`, `tax` and `notes` fields the documents form
   sent, and defaulted to USD regardless of the workspace currency. The generator schema now takes
   `amount`, `tax`, `notes` and an optional `currency` that the route resolves from the workspace —
-  a `N$900` quote is now stored with `total_cents 90000` and prints `NAD 900` with its tax lines
+  a `L$900` quote is now stored with `total_cents 90000` and prints `LRD 900` with its tax lines
   and notes in the PDF.
 - `npm run audit:clients` — a TypeScript-AST audit of every `apiRequest` / `fetch` call in
   `src/components/**` against the routes they target: route existence, exported method, body keys
@@ -455,6 +478,25 @@ a workspace the caller is an active member of, `403 forbidden` for anyone else's
 now covers it end to end: one user creates a second workspace, sees an empty tenant there, switches
 back, finds the original records intact and none of the other workspace's, and is refused a
 workspace they do not belong to. Every one of the 48 API routes is exercised by the suite.
+
+
+### Money is printed in the workspace currency, everywhere
+
+The regional switch to Liberia surfaced a currency defect that had been invisible while the demo
+tenant used the same currency the code assumed. `formatMoney(cents)` defaults to USD, and the AI
+layer — fact pack, analytics, insights, the assistant, generated reports and report PDFs — called
+it with one argument. An LRD workspace asking "How much revenue did we make this week?" was told
+**$16,544**; the figure was L$16,544, roughly US$86. A wrong currency symbol on a revenue number
+is worse than no number.
+
+- `buildFactPack` now carries `currency` (read from the workspace), and every formatter in
+  `src/lib/ai/{facts,analytics,assistant}.ts` passes it: the same question answers **LRD 16,544**.
+- `ReportMetrics` includes `currency`, so the report summary and its PDF print `LRD 16,544` rather
+  than a bare `$`.
+- `DEFAULT_CURRENCY` (`LRD`) is what a new workspace starts in; the onboarding wizard lists LRD,
+  GHS, NGN, SLE, GMD, XOF and USD. Documents already resolved the workspace currency.
+- Verified live against the seeded Monrovia tenant: assistant answer, dashboard stat card,
+  generated report PDF (decoded from its content stream: `LRD 16,544`), and documents.
 
 
 ### Uploaded files are cleaned up, and storage failures say so

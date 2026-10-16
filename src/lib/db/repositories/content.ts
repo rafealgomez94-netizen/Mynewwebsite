@@ -1,5 +1,8 @@
 import { all, get, run, toJson, nowIso, type SqlValue } from '@/lib/db';
 import { newId } from '@/lib/utils';
+// The platform-wide fallback currency (Liberia first) shared with workspace creation.
+// eslint-disable-next-line import/no-cycle
+import { DEFAULT_CURRENCY } from '@/lib/db/repositories/platform';
 
 // ---------------------------------------------------------------------------
 // Documents (invoices, quotes, receipts, proposals, reports, messages, SOPs)
@@ -94,7 +97,7 @@ export function createDocument(
       toJson(input.content),
       input.contentText ?? null,
       input.totalCents ?? 0,
-      input.currency ?? 'USD',
+      input.currency ?? DEFAULT_CURRENCY,
       input.source ?? 'MANUAL',
       issuedAt,
       input.dueAt ?? null,

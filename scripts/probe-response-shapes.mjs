@@ -79,7 +79,7 @@ form.set('files', new File(['SHAPE PROBE\n\nProbe policy line that is long enoug
 line('POST /api/knowledge/upload', await req('POST', '/api/knowledge/upload', undefined, form));
 
 line('POST /api/marketing (posts)', await req('POST', '/api/marketing', { mode: 'posts', channel: 'INSTAGRAM', goal: 'probe', variants: 1 }));
-line('POST /api/support/public', await req('POST', '/api/support/public', { businessSlug: 'windhoek-beauty-studio', message: 'How much are box braids?' }));
+line('POST /api/support/public', await req('POST', '/api/support/public', { businessSlug: 'monrovia-beauty-studio', message: 'How much are box braids?' }));
 line('POST /api/ai/assistant', await req('POST', '/api/ai/assistant', { message: 'Which products are low in stock?' }));
 line('GET /api/dashboard', await req('GET', '/api/dashboard'));
 line('GET /api/analytics', await req('GET', '/api/analytics'));

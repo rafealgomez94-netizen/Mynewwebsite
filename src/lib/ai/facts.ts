@@ -30,6 +30,7 @@ import {
 import { conversationCounts, frequentIssueTopics, openConversationCount, countTickets } from '@/lib/db/repositories/comms';
 import { leadStageSummary, listLeads } from '@/lib/db/repositories/crm';
 import { knowledgeStats } from '@/lib/db/repositories/knowledge';
+import { findBusinessById } from '@/lib/db/repositories/accounts';
 import { LEAD_STAGE_LABELS, type LeadStage } from '@/lib/domain';
 import { formatMoney, formatNumber, percentChange } from '@/lib/utils';
 
@@ -85,8 +86,13 @@ export function buildFactPack(businessId: string) {
     .reduce((sum, row) => sum + row.c, 0);
   const conversionRate = wonLeads + lostLeads > 0 ? (wonLeads / (wonLeads + lostLeads)) * 100 : 0;
 
+  // The tenant's own currency travels with the facts: every formatter below prints in it,
+  // and it is what the AI is told when it answers money questions.
+  const businessRow = findBusinessById(businessId);
+
   return {
     generatedAt: now,
+    currency: businessRow?.currency ?? 'USD',
     windowDays: { current: 7, previous: 7, month: 30 },
     revenue: {
       weekCents: week.revenue,
@@ -231,13 +237,13 @@ export function renderFactPack(facts: BusinessFactPack): string {
   const lines: string[] = [];
   lines.push(`VERIFIED BUSINESS DATA (calculated ${facts.generatedAt.slice(0, 16).replace('T', ' ')} UTC)`);
   lines.push(
-    `Revenue: last 7 days ${formatMoney(facts.revenue.weekCents)} (${facts.revenue.weekOrders} orders) — ${percentChange(
+    `Revenue: last 7 days ${formatMoney(facts.revenue.weekCents, facts.currency)} (${facts.revenue.weekOrders} orders) — ${percentChange(
       facts.revenue.weekCents,
       facts.revenue.weekCents / (1 + facts.revenue.weekChangePct / 100) || 0,
     ).toFixed(1)}% reported week-over-week.`,
   );
   lines.push(
-    `Revenue: last 30 days ${formatMoney(facts.revenue.monthCents)} across ${facts.revenue.monthOrders} orders, average order ${formatMoney(facts.revenue.monthAverageCents)}.`,
+    `Revenue: last 30 days ${formatMoney(facts.revenue.monthCents, facts.currency)} across ${facts.revenue.monthOrders} orders, average order ${formatMoney(facts.revenue.monthAverageCents, facts.currency)}.`,
   );
   lines.push(
     `Customers: ${facts.customers.total} total, ${facts.customers.newThisWeek} new this week, ${facts.customers.newThisMonth} new this month.`,
@@ -251,14 +257,14 @@ export function renderFactPack(facts: BusinessFactPack): string {
   if (facts.sales.popularServices.length) {
     lines.push(
       `Most booked services: ${facts.sales.popularServices
-        .map((service) => `${service.name} (${service.bookings} bookings, priced ${formatMoney(service.priceCents)})`)
+        .map((service) => `${service.name} (${service.bookings} bookings, priced ${formatMoney(service.priceCents, facts.currency)})`)
         .join('; ')}.`,
     );
   }
   if (facts.sales.topItems.length) {
     lines.push(
       `Best sellers (30 days): ${facts.sales.topItems
-        .map((item) => `${item.name} — ${item.units} units / ${formatMoney(item.revenueCents)}`)
+        .map((item) => `${item.name} — ${item.units} units / ${formatMoney(item.revenueCents, facts.currency)}`)
         .join('; ')}.`,
     );
   }
@@ -270,7 +276,7 @@ export function renderFactPack(facts: BusinessFactPack): string {
     );
   }
   lines.push(
-    `Inventory value at cost ${formatMoney(facts.inventory.trackableValueCents)}; ${facts.inventory.lowStockCount} products at or below their minimum level.`,
+    `Inventory value at cost ${formatMoney(facts.inventory.trackableValueCents, facts.currency)}; ${facts.inventory.lowStockCount} products at or below their minimum level.`,
   );
   lines.push(
     `Leads: ${facts.leads.open} open, ${facts.leads.won} won, ${facts.leads.lost} lost; win rate ${facts.leads.conversionRatePct.toFixed(1)}%.`,
@@ -324,5 +330,5 @@ export function businessSnapshotForPrompt(business: {
 }
 
 export function factSummaryLine(facts: BusinessFactPack): string {
-  return `${formatNumber(facts.customers.total)} customers · ${formatMoney(facts.revenue.monthCents)} revenue (30d) · ${facts.appointments.next7Days} upcoming appointments`;
+  return `${formatNumber(facts.customers.total)} customers · ${formatMoney(facts.revenue.monthCents, facts.currency)} revenue (30d) · ${facts.appointments.next7Days} upcoming appointments`;
 }

@@ -11,7 +11,7 @@ export const metadata: Metadata = {
     template: `%s · ${APP_NAME}`,
   },
   description:
-    'AI-powered tools that help businesses automate operations, serve customers, increase sales, and make better decisions from one platform.',
+    'AI-powered tools that help businesses automate operations, serve customers, increase sales, and make better decisions from one platform. Built for small and medium businesses in Liberia and across West Africa.',
   applicationName: APP_NAME,
   keywords: [
     'AI business platform',
@@ -21,6 +21,9 @@ export const metadata: Metadata = {
     'appointment booking',
     'small business software',
     'SaaS dashboard',
+    'business software Liberia',
+    'West Africa business platform',
+    'AI for small business Africa',
   ],
   openGraph: {
     title: `${APP_NAME} — Run Your Business Smarter With AI`,

@@ -314,7 +314,7 @@ export const documentGenerateSchema = z.object({
     .max(60)
     .optional(),
   // No default: the route falls back to the workspace currency, so documents are
-  // never stamped USD in a NAD business just because the form omits the field.
+  // never stamped USD in an LRD business just because the form omits the field.
   currency: z.string().length(3).optional(),
   dueDate: z.string().max(40).optional().or(z.literal('')),
   // Amount/tax/notes are entered on the documents form. They used to be dropped

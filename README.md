@@ -146,7 +146,7 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, RBAC and tenant isolation — **91 checks in total**. It creates its own
+billing, invitations, RBAC and tenant isolation — **92 checks in total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -286,7 +286,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **91 / 91 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **92 / 92 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -457,6 +457,22 @@ back, finds the original records intact and none of the other workspace's, and i
 workspace they do not belong to. Every one of the 48 API routes is exercised by the suite.
 
 
+### Uploaded files are cleaned up, and storage failures say so
+
+`deleteObject()` existed in the storage module but nothing called it: deleting a knowledge source
+dropped its row and chunks while leaving the uploaded menu, price list or policy on disk forever.
+`DELETE /api/knowledge` now reads the source first and removes the stored object with it — covered
+by a smoke check that uploads a fixture, finds its `storage_key` on disk and asserts the file is
+gone once the source is deleted.
+
+The storage driver also fails honestly now. Selecting `STORAGE_DRIVER=s3` without credentials used
+to surface as a generic `500`; the driver raises a typed `StorageUnavailableError`, the API layer
+maps it to `503 storage_unavailable`, and the message names every variable to configure
+(`STORAGE_S3_BUCKET`, `STORAGE_S3_REGION`, `STORAGE_S3_ACCESS_KEY_ID`,
+`STORAGE_S3_SECRET_ACCESS_KEY`). The local driver remains the default and is what the verification
+runs use.
+
+
 ---
 
 ## 11. Deployment
@@ -473,6 +489,21 @@ workspace they do not belong to. Every one of the 48 API routes is exercised by 
    does the reminders alone. Both are idempotent, so overlapping runs are harmless, and without a
    scheduler the dashboard's per-workspace buttons still work.
 6. Replace `public/manager.jpg` with your own photo.
+
+### Two integrations you point at your own account
+
+Both are wired end to end but deliberately left for real credentials, since neither can be
+verified without them:
+
+- **Object storage** — `STORAGE_DRIVER=local` (default) stores uploads under `STORAGE_LOCAL_DIR`.
+  Selecting `s3` without credentials fails safely with `503 storage_unavailable` naming the
+  variables to set; implementing the S3 branch in `src/lib/storage.ts` is all that remains, because
+  `putObject` / `getObjectText` / `deleteObject` are the only storage calls the app makes.
+- **Payments** — `PAYMENT_PROVIDER=manual` (default) applies a plan change immediately. With
+  `PAYMENT_PROVIDER=stripe` and `STRIPE_SECRET_KEY` set, a paid plan change moves the subscription
+  to `INCOMPLETE` and reports whether the `STRIPE_PRICE_<PLAN>_<CYCLE>` id is configured, so your
+  billing worker can create the checkout session. No payment is ever simulated: a subscription only
+  becomes `ACTIVE` when the provider says so.
 
 ---
 

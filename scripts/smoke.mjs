@@ -1532,6 +1532,35 @@ await check('a DOCX upload becomes searchable knowledge', async () => {
   return 'DOCX unzipped and searchable';
 });
 
+await check('deleting a knowledge source removes its stored file', async () => {
+  // Uploaded menus and price lists are kept on disk/s3 under a storage key. Deleting
+  // the source has to take the file with it, otherwise storage grows forever.
+  const text = `Storage cleanup fixture ${STAMP}. A signature treatment costs N$640 and takes 40 minutes. ${'Detail. '.repeat(20)}`;
+  const form = new FormData();
+  form.set('files', new File([text], `cleanup-${STAMP}.txt`, { type: 'text/plain' }));
+  const uploaded = await owner.request('POST', '/api/knowledge/upload', { form });
+  eq(uploaded.status, 201, 'upload the fixture');
+  const sourceId = uploaded.json.data.created?.[0]?.id;
+  assert(sourceId, 'no source id returned');
+
+  const db = new DatabaseSync(dbFilePath());
+  const row = db.prepare('SELECT storage_key FROM knowledge_sources WHERE id = ?').get(sourceId);
+  db.close();
+  assert(row?.storage_key, 'the upload recorded no storage key');
+
+  const root = process.env.STORAGE_LOCAL_DIR
+    ? path.resolve(process.cwd(), process.env.STORAGE_LOCAL_DIR)
+    : path.join(process.cwd(), 'data', 'storage');
+  const file = path.join(root, row.storage_key);
+  assert(fs.existsSync(file), `the uploaded file is not on disk: ${row.storage_key}`);
+
+  const removed = await owner.del('/api/knowledge', { id: sourceId, type: 'source' });
+  eq(removed.status, 200, 'delete the source');
+  eq(removed.json.data.deleted, true, 'deleted flag');
+  assert(!fs.existsSync(file), 'the stored file was left behind after deleting the source');
+  return 'the file is removed with its source';
+});
+
 await check('a PDF with no text is flagged instead of indexed as noise', async () => {
   // An image-only or unreadable PDF must not become hundreds of junk chunks.
   const emptyPdf = '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n';

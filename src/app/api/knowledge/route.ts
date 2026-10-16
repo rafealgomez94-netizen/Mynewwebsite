@@ -9,6 +9,7 @@ import {
   createSource,
   deleteFaq,
   deleteSource,
+  findSource,
   knowledgeStats,
   listFaqs,
   listSources,
@@ -16,6 +17,7 @@ import {
   updateFaq,
 } from '@/lib/db/repositories/knowledge';
 import { incrementUsage, planForBusiness } from '@/lib/db/repositories/platform';
+import { deleteObject } from '@/lib/storage';
 import { HttpError } from '@/lib/auth/rbac';
 
 export const runtime = 'nodejs';
@@ -111,8 +113,15 @@ export async function DELETE(request: Request) {
     const ctx = requireTenant(await getSessionContext());
     assertPermission(ctx, 'knowledge:write');
     const input = await parseBody(request, z.object({ id: z.string().min(3), type: z.enum(['source', 'faq']) }));
-    if (input.type === 'faq') deleteFaq(ctx.business.id, input.id);
-    else deleteSource(ctx.business.id, input.id);
+    if (input.type === 'faq') {
+      deleteFaq(ctx.business.id, input.id);
+    } else {
+      // Read the row first: the uploaded file it points at has to go with it, or every
+      // deleted menu/price list keeps occupying storage forever.
+      const source = findSource(ctx.business.id, input.id);
+      deleteSource(ctx.business.id, input.id);
+      if (source?.storage_key) await deleteObject(source.storage_key);
+    }
     return ok({ deleted: true, stats: knowledgeStats(ctx.business.id) });
   } catch (error) {
     return handleError(error);

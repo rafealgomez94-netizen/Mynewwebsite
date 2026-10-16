@@ -13,6 +13,18 @@ import { extractDocx, extractPdf } from '@/lib/services/document-text';
  */
 export type StoredFile = { key: string; size: number; contentType: string };
 
+/**
+ * Raised when the configured driver cannot serve requests yet (for example
+ * `STORAGE_DRIVER=s3` without credentials). The API answers `503` with this message
+ * so an operator sees what to configure instead of a generic server error.
+ */
+export class StorageUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StorageUnavailableError';
+  }
+}
+
 export function storageDriver(): 'local' | 's3' {
   return process.env.STORAGE_DRIVER === 's3' ? 's3' : 'local';
 }
@@ -36,7 +48,9 @@ export async function putObject(
   if (storageDriver() === 's3') {
     // S3 driver placeholder: configure STORAGE_S3_* to enable. Throwing here keeps
     // the failure explicit instead of silently dropping customer documents.
-    throw new Error('S3 storage driver is not enabled. Set STORAGE_DRIVER=local or configure the S3 credentials.');
+    throw new StorageUnavailableError(
+      'Object storage is not configured on this deployment. Set STORAGE_DRIVER=local, or configure STORAGE_S3_BUCKET, STORAGE_S3_REGION, STORAGE_S3_ACCESS_KEY_ID and STORAGE_S3_SECRET_ACCESS_KEY.',
+    );
   }
   const target = path.join(localRoot(), key);
   await fs.mkdir(path.dirname(target), { recursive: true });

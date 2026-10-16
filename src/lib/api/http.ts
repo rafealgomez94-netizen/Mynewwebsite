@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ZodError, type TypeOf, type ZodTypeAny } from 'zod';
 import { HttpError } from '@/lib/auth/rbac';
+import { StorageUnavailableError } from '@/lib/storage';
 
 export function ok<T>(data: T, init?: ResponseInit) {
   return NextResponse.json({ ok: true, data }, init);
@@ -13,6 +14,9 @@ export function fail(status: number, message: string, code = 'error', details?: 
 export function handleError(error: unknown) {
   if (error instanceof HttpError) {
     return fail(error.status, error.message, error.code, error.details);
+  }
+  if (error instanceof StorageUnavailableError) {
+    return fail(503, error.message, 'storage_unavailable');
   }
   if (error instanceof ZodError) {
     const first = error.issues[0];

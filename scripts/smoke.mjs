@@ -20,6 +20,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const BASE = (process.env.SMOKE_BASE_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
+
+/** Reads a value the server was started with (Next loads .env itself). */
+function envValue(key) {
+  if (process.env[key]) return process.env[key];
+  try {
+    const file = fs.readFileSync(path.join(process.cwd(), '.env'), 'utf8');
+    const match = file.match(new RegExp(`^${key}=(.*)$`, 'm'));
+    return match ? match[1].trim().replace(/^["']|["']$/g, '') : '';
+  } catch {
+    return '';
+  }
+}
 const STAMP = `${Date.now().toString().slice(-7)}`;
 const OWNER_EMAIL = `smoke-owner-${STAMP}@example.test`;
 const INVITEE_EMAIL = `smoke-invitee-${STAMP}@example.test`;
@@ -734,6 +746,171 @@ await check('appointment is created, rescheduled and cancelled', async () => {
   const cancelled = await owner.patch('/api/appointments', { id: appointmentId, status: 'CANCELLED' });
   eq(cancelled.status, 200, 'cancel');
   return 'created → rescheduled → cancelled';
+});
+
+await check('rescheduling respects staff availability and valid times', async () => {
+  const day = workingDay(4);
+  const firstStart = workingDate(4, 11);
+  const secondStart = workingDate(4, 13);
+  const hour = 3600000;
+
+  const a = await owner.post('/api/appointments', {
+    title: 'Smoke slot A',
+    customerId,
+    staffId,
+    startAt: firstStart.toISOString(),
+    endAt: new Date(firstStart.getTime() + hour).toISOString(),
+    status: 'CONFIRMED',
+    price: '120',
+  });
+  eq(a.status, 201, 'booking the first slot');
+  const b = await owner.post('/api/appointments', {
+    title: 'Smoke slot B',
+    customerId,
+    staffId,
+    startAt: secondStart.toISOString(),
+    endAt: new Date(secondStart.getTime() + hour).toISOString(),
+    status: 'CONFIRMED',
+    price: '120',
+  });
+  eq(b.status, 201, 'booking the second slot');
+
+  // Moving B on top of A must be refused exactly like booking it there would be.
+  const clash = await owner.patch('/api/appointments', {
+    id: b.json.data.id,
+    startAt: new Date(firstStart.getTime() + 15 * 60000).toISOString(),
+    endAt: new Date(firstStart.getTime() + 75 * 60000).toISOString(),
+  });
+  eq(clash.status, 409, 'reschedule onto a busy slot');
+  eq(clash.json?.error?.code, 'conflict', 'conflict code');
+
+  // A free slot is accepted and stored.
+  const target = workingDate(4, 16);
+  const moved = await owner.patch('/api/appointments', {
+    id: b.json.data.id,
+    startAt: target.toISOString(),
+    endAt: new Date(target.getTime() + hour).toISOString(),
+  });
+  eq(moved.status, 200, 'reschedule into a free slot');
+  const list = await owner.get('/api/appointments?limit=200');
+  const stored = (list.json.data.appointments ?? []).find((row) => row.id === b.json.data.id);
+  assert(stored, 'the rescheduled appointment disappeared');
+  eq(stored.start_at, target.toISOString(), 'stored start time');
+
+  // Invalid times and unknown ids are reported, not stored.
+  const backwards = await owner.patch('/api/appointments', {
+    id: b.json.data.id,
+    startAt: workingDate(4, 17).toISOString(),
+    endAt: workingDate(4, 16).toISOString(),
+  });
+  eq(backwards.status, 422, 'end before start');
+  eq(backwards.json?.error?.code, 'invalid_time', 'invalid time code');
+  const ghost = await owner.patch('/api/appointments', { id: 'apt_smoke_missing', status: 'CONFIRMED' });
+  eq(ghost.status, 404, 'unknown appointment');
+  eq(ghost.json?.error?.code, 'not_found', 'not found code');
+
+  // The team is told, and the freed slot is bookable again.
+  const notifications = await owner.get('/api/notifications');
+  assert(
+    (notifications.json.data.items ?? []).some((item) => item.type === 'APPOINTMENT_RESCHEDULED'),
+    'no notification for the rescheduled appointment',
+  );
+  const rebook = await owner.post('/api/appointments', {
+    title: 'Smoke slot B2',
+    customerId,
+    staffId,
+    startAt: secondStart.toISOString(),
+    endAt: new Date(secondStart.getTime() + hour).toISOString(),
+    status: 'CONFIRMED',
+    price: '120',
+  });
+  eq(rebook.status, 201, 'the vacated slot can be booked again');
+  return `${day}: conflict 409 → free slot 200 → notification → slot reusable`;
+});
+
+await check('appointment reminders are due once and sent once', async () => {
+  // The lead time is a business setting (onboarding: communication preferences).
+  const widened = await owner.patch('/api/business/profile', { comms: { reminderLeadHours: 48 } });
+  eq(widened.status, 200, 'setting the reminder lead time');
+
+  const hour = 3600000;
+  const startsAt = workingDate(1, 9); // 13–33 hours out, always inside a 48 hour window
+  const booked = await owner.post('/api/appointments', {
+    title: 'Smoke reminder',
+    customerId,
+    staffId,
+    startAt: startsAt.toISOString(),
+    endAt: new Date(startsAt.getTime() + hour).toISOString(),
+    status: 'CONFIRMED',
+    price: '150',
+  });
+  eq(booked.status, 201, 'booking the appointment to be reminded');
+
+  // A cancelled appointment inside the same window is never reminded.
+  const cancelledStart = workingDate(1, 14);
+  const cancelled = await owner.post('/api/appointments', {
+    title: 'Smoke cancelled reminder',
+    customerId,
+    startAt: cancelledStart.toISOString(),
+    endAt: new Date(cancelledStart.getTime() + hour).toISOString(),
+    status: 'CANCELLED',
+    price: '90',
+  });
+  eq(cancelled.status, 201, 'booking a cancelled appointment');
+
+  const before = await owner.get('/api/appointments/reminders');
+  eq(before.status, 200, 'reminder preview');
+  const dueBefore = before.json.data.due;
+  assert(dueBefore >= 1, `expected at least one reminder due, got ${dueBefore}`);
+  assert(
+    !(before.json.data.deliveries ?? []).length,
+    'the preview must not send anything',
+  );
+
+  const first = await owner.post('/api/appointments/reminders', {});
+  eq(first.status, 200, 'sending due reminders');
+  assert(first.json.data.sent >= 1, `expected a reminder to go out, sent ${first.json.data.sent}`);
+  eq(first.json.data.sent + first.json.data.skipped, dueBefore, 'every due reminder was handled');
+
+  const second = await owner.post('/api/appointments/reminders', {});
+  eq(second.json.data.sent, 0, 'a second run must not resend');
+  eq(second.json.data.due, 0, 'nothing left due');
+
+  // Moving an appointment makes it due again: the customer must hear the new time.
+  const movedTo = workingDate(1, 16);
+  const moved = await owner.patch('/api/appointments', {
+    id: booked.json.data.id,
+    startAt: movedTo.toISOString(),
+    endAt: new Date(movedTo.getTime() + hour).toISOString(),
+  });
+  eq(moved.status, 200, 'rescheduling the reminded appointment');
+  const afterMove = await owner.get('/api/appointments/reminders');
+  assert(afterMove.json.data.due >= 1, 'a moved appointment must be due for a reminder again');
+  const resent = await owner.post('/api/appointments/reminders', {});
+  assert(resent.json.data.sent >= 1, 'the moved appointment was not reminded');
+
+  await owner.patch('/api/business/profile', { comms: { reminderLeadHours: 24 } });
+  return `due ${dueBefore} → sent ${first.json.data.sent} → resend after move ${resent.json.data.sent}`;
+});
+
+await check('the reminder scheduler endpoint is secret-protected', async () => {
+  const refused = await anon.get('/api/cron/reminders?secret=not-the-secret');
+  const secret = envValue('CRON_SECRET');
+  if (!secret) {
+    // The safe default: no secret configured means no platform-wide work runs,
+    // while the per-workspace button keeps working.
+    eq(refused.status, 503, 'unconfigured scheduler');
+    eq(refused.json?.error?.code, 'cron_not_configured', 'cron code');
+    return 'no CRON_SECRET → 503, dashboard button still works';
+  }
+  eq(refused.status, 401, 'wrong secret');
+  const run = await anon.get(`/api/cron/reminders?secret=${secret}`);
+  eq(run.status, 200, 'scheduled run');
+  assert(typeof run.json.data.sent === 'number', 'the run did not report what it sent');
+  const bearer = await anon.post('/api/cron/reminders', {}, { headers: { authorization: `Bearer ${secret}` } });
+  eq(bearer.status, 200, 'scheduled run with a bearer header');
+  eq(bearer.json.data.sent, 0, 'the scheduler is idempotent');
+  return `401 without the secret; runs twice, ${run.json.data.sent} then 0 sent`;
 });
 
 await check('public booking creates an appointment and a customer record', async () => {

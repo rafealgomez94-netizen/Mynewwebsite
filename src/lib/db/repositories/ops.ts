@@ -546,6 +546,28 @@ export function findReport(businessId: string, id: string): ReportRowFull | unde
   return row ? mapReport(row) : undefined;
 }
 
+/**
+ * Appointments that are due a reminder: still open (pending or confirmed), starting
+ * inside the requested window, not reminded yet, and linked to a customer we can email.
+ * Uses idx_appointments_business(business_id, start_at).
+ */
+export function appointmentsNeedingReminder(
+  businessId: string,
+  window: { fromIso: string; toIso: string; limit?: number },
+): AppointmentRow[] {
+  return all<AppointmentRow>(
+    `${APPOINTMENT_SELECT}
+     WHERE a.business_id = ?
+       AND a.status IN ('PENDING', 'CONFIRMED')
+       AND a.reminder_sent_at IS NULL
+       AND a.start_at >= ? AND a.start_at <= ?
+       AND c.email IS NOT NULL AND TRIM(c.email) <> ''
+     ORDER BY a.start_at ASC
+     LIMIT ?`,
+    [businessId, window.fromIso, window.toIso, Math.min(Math.max(window.limit ?? 200, 1), 500)],
+  );
+}
+
 /** Marks appointment reminders as sent so the reminder job never double-sends. */
 export function markReminderSent(businessId: string, appointmentId: string): void {
   tx(() => {

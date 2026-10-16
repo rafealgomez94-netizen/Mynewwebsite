@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarClock, Clock } from 'lucide-react';
+import { BellRing, CalendarClock, Clock } from 'lucide-react';
 import { Badge, Button, Card, Field, Input, Modal, Select, StatusBadge, Textarea, apiRequest, useToast } from '@/components/ui';
 import { formatDateTime, formatMoney } from '@/lib/utils';
 
@@ -48,6 +48,12 @@ export function AppointmentsView({
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [sendingReminders, setSendingReminders] = useState(false);
+  const [reschedule, setReschedule] = useState<AppointmentItem | null>(null);
+  const [rescheduleForm, setRescheduleForm] = useState({ date: '', time: '', staffId: '' });
+  const [rescheduleSlots, setRescheduleSlots] = useState<Slot[]>([]);
+  const [loadingRescheduleSlots, setLoadingRescheduleSlots] = useState(false);
+  const [rescheduling, setRescheduling] = useState(false);
   const [form, setForm] = useState({
     title: '',
     customerId: '',
@@ -105,6 +111,74 @@ export function AppointmentsView({
     await reload();
   };
 
+  /**
+   * Rescheduling opens the same real availability the booking form uses, so a moved
+   * appointment lands in a free slot instead of on top of another customer.
+   */
+  const openReschedule = async (appointment: AppointmentItem) => {
+    const start = appointment.start_at.slice(0, 16);
+    setReschedule(appointment);
+    setRescheduleForm({ date: start.slice(0, 10), time: start.slice(11, 16), staffId: appointment.staff_id ?? '' });
+    await loadRescheduleSlots(start.slice(0, 10), appointment.staff_id ?? '', appointment.service_id ?? '');
+  };
+
+  const loadRescheduleSlots = async (day: string, staffId: string, serviceId: string) => {
+    if (!day) return;
+    setLoadingRescheduleSlots(true);
+    const duration = services.find((service) => service.id === serviceId)?.durationMinutes ?? 60;
+    const params = new URLSearchParams({ availability: 'true', day, duration: String(duration) });
+    if (staffId) params.set('staffId', staffId);
+    const result = await apiRequest<{ slots: Slot[] }>(`/api/appointments?${params.toString()}`, { method: 'GET' });
+    setLoadingRescheduleSlots(false);
+    if (result.ok) setRescheduleSlots(result.data.slots ?? []);
+  };
+
+  const submitReschedule = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!reschedule) return;
+    setRescheduling(true);
+    const duration = services.find((service) => service.id === reschedule.service_id)?.durationMinutes
+      ?? Math.max(Math.round((new Date(reschedule.end_at).getTime() - new Date(reschedule.start_at).getTime()) / 60000), 15);
+    const [hours, minutes] = rescheduleForm.time.split(':').map(Number);
+    const end = new Date(Date.UTC(2024, 0, 1, hours, minutes + duration));
+    const endTime = `${String(end.getUTCHours()).padStart(2, '0')}:${String(end.getUTCMinutes()).padStart(2, '0')}`;
+    const result = await apiRequest('/api/appointments', {
+      method: 'PATCH',
+      body: {
+        id: reschedule.id,
+        startAt: new Date(`${rescheduleForm.date}T${rescheduleForm.time}:00Z`).toISOString(),
+        endAt: new Date(`${rescheduleForm.date}T${endTime}:00Z`).toISOString(),
+        staffId: rescheduleForm.staffId,
+      },
+    });
+    setRescheduling(false);
+    if (!result.ok) {
+      push(result.error, 'danger');
+      return;
+    }
+    push('Appointment rescheduled — the customer keeps the same booking reference', 'success');
+    setReschedule(null);
+    setRescheduleSlots([]);
+    await reload();
+  };
+
+  const sendDueReminders = async () => {
+    setSendingReminders(true);
+    const result = await apiRequest<{ due: number; sent: number; skipped: number }>('/api/appointments/reminders', { method: 'POST' });
+    setSendingReminders(false);
+    if (!result.ok) {
+      push(result.error, 'danger');
+      return;
+    }
+    const { sent, due } = result.data;
+    if (sent === 0) {
+      push(due === 0 ? 'No reminders are due right now.' : 'Nothing sent — check the customer email addresses.', 'info');
+      return;
+    }
+    push(`${sent} reminder${sent === 1 ? '' : 's'} sent`, 'success');
+    await reload();
+  };
+
   const filtered = statusFilter ? appointments.filter((appointment) => appointment.status === statusFilter) : appointments;
 
   return (
@@ -132,15 +206,20 @@ export function AppointmentsView({
             </option>
           ))}
         </Select>
-        <Button
-          onClick={async () => {
-            setOpen(true);
-            const today = new Date().toISOString().slice(0, 10);
-            await loadAvailability(today, '', '');
-          }}
-        >
-          <CalendarClock className="h-4 w-4" /> New appointment
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="secondary" onClick={sendDueReminders} loading={sendingReminders}>
+            <BellRing className="h-4 w-4" /> Send due reminders
+          </Button>
+          <Button
+            onClick={async () => {
+              setOpen(true);
+              const today = new Date().toISOString().slice(0, 10);
+              await loadAvailability(today, '', '');
+            }}
+          >
+            <CalendarClock className="h-4 w-4" /> New appointment
+          </Button>
+        </div>
       </div>
 
       <Card className="p-0">
@@ -170,18 +249,28 @@ export function AppointmentsView({
                     <StatusBadge status={appointment.status} />
                   </td>
                   <td className="px-4 py-3">
-                    <Select
-                      value={appointment.status}
-                      onChange={(event) => updateStatus(appointment, event.target.value)}
-                      className="w-auto text-xs"
-                      aria-label={`Change status for ${appointment.title}`}
-                    >
-                      {['PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'NO_SHOW'].map((status) => (
-                        <option key={status} value={status}>
-                          {status.replace('_', ' ').toLowerCase()}
-                        </option>
-                      ))}
-                    </Select>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={appointment.status}
+                        onChange={(event) => updateStatus(appointment, event.target.value)}
+                        className="w-auto text-xs"
+                        aria-label={`Change status for ${appointment.title}`}
+                      >
+                        {['PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'NO_SHOW'].map((status) => (
+                          <option key={status} value={status}>
+                            {status.replace('_', ' ').toLowerCase()}
+                          </option>
+                        ))}
+                      </Select>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => openReschedule(appointment)}
+                        aria-label={`Reschedule ${appointment.title}`}
+                      >
+                        <CalendarClock className="h-3.5 w-3.5" /> Reschedule
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -330,6 +419,104 @@ export function AppointmentsView({
                       startAt: slot.startAt.slice(0, 16),
                       endAt: slot.endAt.slice(0, 16),
                       staffId: slot.staffId ?? form.staffId,
+                    })
+                  }
+                >
+                  {slot.startAt.slice(11, 16)}
+                  {slot.staffName ? ` · ${slot.staffName}` : ''}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(reschedule)}
+        onClose={() => setReschedule(null)}
+        title={reschedule ? `Reschedule: ${reschedule.title}` : 'Reschedule'}
+        description="Pick a new day and time from the real availability for this service and staff member. The appointment keeps its history and notes."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setReschedule(null)}>
+              Keep current time
+            </Button>
+            <Button onClick={submitReschedule} loading={rescheduling}>
+              Move appointment
+            </Button>
+          </>
+        }
+      >
+        <form onSubmit={submitReschedule} className="grid gap-4 sm:grid-cols-2">
+          <Field label="Currently booked">
+            <p className="text-sm">{reschedule ? formatDateTime(reschedule.start_at) : '—'}</p>
+          </Field>
+          <Field label="Staff">
+            <Select
+              value={rescheduleForm.staffId}
+              onChange={async (event) => {
+                setRescheduleForm({ ...rescheduleForm, staffId: event.target.value });
+                await loadRescheduleSlots(rescheduleForm.date, event.target.value, reschedule?.service_id ?? '');
+              }}
+            >
+              <option value="">Any available</option>
+              {staff.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="New date" required>
+            <Input
+              required
+              type="date"
+              value={rescheduleForm.date}
+              onChange={async (event) => {
+                setRescheduleForm({ ...rescheduleForm, date: event.target.value });
+                await loadRescheduleSlots(event.target.value, rescheduleForm.staffId, reschedule?.service_id ?? '');
+              }}
+            />
+          </Field>
+          <Field label="New start time" required>
+            <Input
+              required
+              type="time"
+              value={rescheduleForm.time}
+              onChange={(event) => setRescheduleForm({ ...rescheduleForm, time: event.target.value })}
+            />
+          </Field>
+          {reschedule?.customer_name ? (
+            <p className="muted text-xs sm:col-span-2">
+              {reschedule.customer_name} keeps the booking and the reminder for the new time is sent automatically.
+            </p>
+          ) : null}
+        </form>
+
+        <div className="mt-5">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-brand-600" aria-hidden />
+            <p className="text-sm font-semibold">Free slots for that day</p>
+            {loadingRescheduleSlots ? <span className="muted text-xs">Checking…</span> : null}
+          </div>
+          {rescheduleSlots.length === 0 && !loadingRescheduleSlots ? (
+            <p className="muted mt-2 text-xs">
+              No open slots for that day — every slot is booked, or the business is closed. Try another date or staff member.
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {rescheduleSlots.map((slot) => (
+                <Button
+                  key={`${slot.startAt}-${slot.staffId ?? 'any'}`}
+                  type="button"
+                  size="sm"
+                  variant={rescheduleForm.time === slot.startAt.slice(11, 16) ? 'primary' : 'secondary'}
+                  onClick={() =>
+                    setRescheduleForm({
+                      ...rescheduleForm,
+                      date: slot.startAt.slice(0, 10),
+                      time: slot.startAt.slice(11, 16),
+                      staffId: slot.staffId ?? rescheduleForm.staffId,
                     })
                   }
                 >

@@ -31,7 +31,7 @@ A floating WhatsApp widget is present on every public page (number from `NEXT_PU
 | Customers (CRM) | `/dashboard/customers` | Search, status filters, notes, tags, spend, appointments, conversations, last interaction |
 | Customer detail | `/dashboard/customers/[id]` | Full history, orders, appointments, conversations, edit |
 | Sales & pipeline | `/dashboard/sales` | Leads, AI qualification, scoring, follow-up reminders, New Lead → Contacted → Qualified → Proposal → Negotiation → Won/Lost |
-| Appointments | `/dashboard/appointments` | Calendar, staff availability, booking, confirmation, rescheduling, cancellation, reminders |
+| Appointments | `/dashboard/appointments` | Calendar, staff availability, booking, confirmation, rescheduling into a real free slot (double-booking refused with `409`), cancellation, and reminders the business controls — the dashboard sends the due ones on demand and `/api/cron/reminders` does it on a schedule |
 | Tasks | `/dashboard/tasks` | To Do / In Progress / Completed, priorities, deadlines, assignment, AI-suggested tasks |
 | Orders | `/dashboard/orders` | Order creation from services and products, payment status, channels |
 | Inventory | `/dashboard/inventory` | SKU, quantity, cost, selling price, supplier, minimum stock, automatic low-stock detection, stock movements, fast/slow movers |
@@ -146,7 +146,7 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, RBAC and tenant isolation — **84 checks in total**. It creates its own
+billing, invitations, RBAC and tenant isolation — **87 checks in total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -212,6 +212,7 @@ Everything is documented in `.env.example`. The important ones:
 | `STORAGE_DRIVER`, `STORAGE_LOCAL_DIR`, `STORAGE_S3_*` | Knowledge-base document storage |
 | `PAYMENT_PROVIDER`, `PAYMENT_SECRET`, `STRIPE_*` | Billing. `manual` (default) applies a plan change immediately; `stripe` uses configured price IDs. No keys are ever hard-coded |
 | `NEXT_PUBLIC_SUPPORT_*` | Public contact details (email, phone, WhatsApp) shown in the footer, manager card and floating WhatsApp widget. `NEXT_PUBLIC_SUPPORT_DIAL_CODE` converts a nationally written WhatsApp number (`077…`) into international form (`wa.me/264774075285`) |
+| `CRON_SECRET` | Guards `GET\|POST /api/cron/reminders`, the scheduler entry point for appointment reminders (`openssl rand -hex 32`). Empty ⇒ the platform-wide run answers `503`; per-workspace sending is unaffected |
 | `SEED_*` | Emails/passwords created by `npm run db:seed` |
 
 Secrets are read on the server only. Nothing in `src/components` or any client bundle touches `process.env` values other than `NEXT_PUBLIC_*`.
@@ -285,7 +286,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **84 / 84 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **87 / 87 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -366,6 +367,35 @@ Every mutating API route resolves the session, requires tenant membership, check
   `renderFactPack(facts)`), an unreachable onboarding-wizard state, and 13 unused imports/helpers.
 
 
+### Appointments: rescheduling and reminders
+
+The page promised rescheduling and reminders, and the booking confirmation email told customers
+to reply if they needed a different time — but the dashboard only offered a status dropdown, and
+nothing ever sent a reminder. Two real defects, both now fixed:
+
+- `PATCH /api/appointments` moved an appointment without any overlap check, so a staff member
+  could be double-booked from the dashboard even though `POST` guarded against it. The overlap
+  test is now shared by booking and rescheduling (`409 conflict`), a reschedule validates that
+  the end is after the start (`422 invalid_time`) and an unknown id is a `404` instead of a
+  silent no-op. Rescheduling also announces itself with an `APPOINTMENT_RESCHEDULED` notification
+  and an audit entry, and cancellation raises `APPOINTMENT_CANCELLED`.
+- Reminders were never sent: `markReminderSent()` had no caller, and the lead time collected
+  during onboarding (`businesses.comms_json.reminderLeadHours`, default 24h) was stored and then
+  ignored. `src/lib/services/reminders.ts` now sends the reminders that are due — open
+  appointments starting inside the configured window, with a customer email address — and stamps
+  `appointments.reminder_sent_at` so the dashboard button and the scheduler can never double-send.
+  Moving an appointment clears that stamp, so the customer is reminded again at the new time.
+
+Verified over HTTP: a reschedule onto an occupied slot is refused while a free slot is accepted
+(the vacated slot becomes bookable again), the reminder preview reports what is due without
+sending, the first run sends and the second reports `sent: 0`, a cancelled appointment is never
+reminded, and after moving a reminded appointment it becomes due again. All covered by three
+smoke checks. `/api/cron/reminders` answers `503 cron_not_configured` without `CRON_SECRET`,
+`401` with a wrong secret, and runs idempotently with the right one (query parameter or bearer
+header). Note that a platform-wide cron run sends any due reminders for every tenant, including
+the demo tenant — in development those messages go to the server console.
+
+
 ---
 
 ## 11. Deployment
@@ -375,7 +405,12 @@ Every mutating API route resolves the session, requires tenant membership, check
 3. `npm ci && npm run build && npm start` (or deploy the same commands to a Node 22 host; the app binds `0.0.0.0:3000`).
 4. Run `npm run db:seed` only if you want the demo data; in production create the first account through `/signup` and promote your platform administrator in SQL:
    `UPDATE users SET platform_role = 'PLATFORM_ADMIN' WHERE email = 'you@example.com';`
-5. Replace `public/manager.jpg` with your own photo.
+5. Set `CRON_SECRET` and point a scheduler at the reminder endpoint every 15–60 minutes —
+   Vercel Cron (`"crons": [{ "path": "/api/cron/reminders?secret=…", "schedule": "*/30 * * * *" }]`),
+   a systemd timer, GitHub Actions or any uptime monitor. The route is idempotent, so overlapping
+   runs are harmless; without a scheduler the dashboard's "Send due reminders" button still works
+   per workspace.
+6. Replace `public/manager.jpg` with your own photo.
 
 ---
 

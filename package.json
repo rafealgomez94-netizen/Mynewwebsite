@@ -16,7 +16,8 @@
     "photo:manager": "node scripts/set-manager-photo.mjs",
     "audit:clients": "node scripts/audit-client-contracts.mjs",
     "verify:extraction": "node scripts/verify-extraction.mjs",
-    "probe:shapes": "node scripts/probe-response-shapes.mjs"
+    "probe:shapes": "node scripts/probe-response-shapes.mjs",
+    "prod:check": "node scripts/prodcheck.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

@@ -310,6 +310,15 @@ Permissions include `integrations:read` for managers and `integrations:write` fo
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
+- `npm run prod:check` — **24 / 24 checks pass** against a real production build (`next build` in a
+  scratch copy of the repository, `next start` on port 3111, `PROD_BASE_URL=http://127.0.0.1:3111`).
+  It covers what the dev suite cannot: the full smoke suite needs invitation and reset tokens,
+  which production deliberately withholds, so this probe asserts the production-only truths —
+  pages render, the +231 WhatsApp link and contact details are present, `/api/dev/grounding` is
+  `404`, anonymous API calls are `401`, `/dashboard` and `/admin` redirect, signup works without
+  leaking a verification token, a new workspace starts in LRD, a fresh tenant sees none of another
+  tenant's customers, the assistant answers with a source label, integrations report credential
+  state and reject unknown providers with `422`, and billing reports the enforced FREE limits.
 - `npm run smoke` — **97 / 97 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant

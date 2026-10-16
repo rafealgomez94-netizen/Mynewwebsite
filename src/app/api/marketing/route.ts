@@ -13,7 +13,7 @@ import {
   updatePost,
 } from '@/lib/db/repositories/content';
 import { generateCampaignPlan, generateMarketingPosts } from '@/lib/ai/generators';
-import { incrementUsage, planForBusiness, usageCount } from '@/lib/db/repositories/platform';
+import { aiAllowanceUsed, incrementUsage, planForBusiness } from '@/lib/db/repositories/platform';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     const mode = z.enum(['posts', 'calendar']).parse(body.mode ?? 'posts');
 
     const { plan } = planForBusiness(ctx.business.id);
-    if (usageCount(ctx.business.id, 'AI_MESSAGES') >= plan.limits.aiMessages) {
+    if (aiAllowanceUsed(ctx.business.id) >= plan.limits.aiMessages) {
       throw new HttpError(402, `AI generation limit reached for the ${plan.name} plan this month.`, 'plan_limit');
     }
 
@@ -89,7 +89,7 @@ export async function POST(request: Request) {
       posts: listPosts(ctx.business.id, { campaignId: generated.campaignId }),
       campaigns: listCampaigns(ctx.business.id),
       provider: generated.provider,
-      usage: { used: usageCount(ctx.business.id, 'AI_MESSAGES'), limit: plan.limits.aiMessages },
+      usage: { used: aiAllowanceUsed(ctx.business.id), limit: plan.limits.aiMessages },
     }, { status: 201 });
   } catch (error) {
     return handleError(error);

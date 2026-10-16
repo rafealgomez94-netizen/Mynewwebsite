@@ -3,7 +3,7 @@ import { assistantSchema } from '@/lib/validation';
 import { getSessionContext } from '@/lib/auth/session';
 import { assertPermission, HttpError, requireTenant } from '@/lib/auth/rbac';
 import { askAssistant, ASSISTANT_EXAMPLES, assistantProviderName } from '@/lib/ai/assistant';
-import { incrementUsage, planForBusiness, usageCount } from '@/lib/db/repositories/platform';
+import { aiAllowanceUsed, incrementUsage, planForBusiness } from '@/lib/db/repositories/platform';
 import { listMessages, addMessage } from '@/lib/db/repositories/comms';
 
 export const runtime = 'nodejs';
@@ -18,7 +18,7 @@ export async function GET() {
       provider: assistantProviderName(),
       examples: ASSISTANT_EXAMPLES,
       usage: {
-        used: usageCount(ctx.business.id, 'AI_MESSAGES'),
+        used: aiAllowanceUsed(ctx.business.id),
         limit: plan.limits.aiMessages,
         plan: plan.name,
       },
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
     // AI usage limits are enforced per billing period.
     const { plan } = planForBusiness(ctx.business.id);
-    const used = usageCount(ctx.business.id, 'AI_MESSAGES');
+    const used = aiAllowanceUsed(ctx.business.id);
     if (used >= plan.limits.aiMessages) {
       throw new HttpError(
         402,

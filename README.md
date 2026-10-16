@@ -147,7 +147,8 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, integrations, RBAC and tenant isolation — **97 checks in total**. It creates its own
+billing, plan allowances, invitations, integrations, RBAC and tenant isolation — **99 checks in
+total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -319,7 +320,7 @@ Permissions include `integrations:read` for managers and `integrations:write` fo
   leaking a verification token, a new workspace starts in LRD, a fresh tenant sees none of another
   tenant's customers, the assistant answers with a source label, integrations report credential
   state and reject unknown providers with `422`, and billing reports the enforced FREE limits.
-- `npm run smoke` — **97 / 97 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **99 / 99 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -505,6 +506,44 @@ copies disagreed the **lower** limit won, so the public page can never promise m
 enforces. Verified live: the API reports 20,000 customers / 15 users / 10,000 AI messages for
 Professional and 200,000 / 60 / 60,000 for Business, and the rendered pricing page quotes exactly
 those figures.
+
+### Every advertised limit is enforced somewhere
+
+A limit that no route checks is a promise the product cannot keep, and three of them were exactly
+that: `products` and `appointments` appeared in no route at all, and the WhatsApp counter was
+written with a quantity of `0`, so it could never move. The plan copy still said "50 products",
+"100 appointments per month" and "200 WhatsApp messages per month".
+
+Each one is now checked where the record is created, and the refusals name the plan and the
+allowance: `POST /api/products` → `402 plan_limit` when the catalogue is full; `POST /api/appointments`
+and `POST /api/public/book` → `402 plan_limit` and `409 booking_unavailable` respectively when the
+calendar month is full; `POST /api/conversations/:id/messages` → `402 plan_limit` on the outbound
+WhatsApp meter. A customer booking never sees the word "plan": the public refusal says online
+booking is unavailable right now, gives the business phone number, and the owner gets one
+`CRITICAL` alert telling them bookings are being turned away.
+
+The AI allowance is shared by every AI surface. The public support widget answered customers
+without checking it at all, so the busiest AI surface was unmetered; `aiAllowanceUsed()` in the
+platform repository is now the single definition (assistant + marketing + support), and all three
+routes enforce it from the same number. When it is spent the widget does not fail and does not
+guess — it replies with the business's own escalation message, asks for contact details, opens a
+ticket and warns the owner once.
+
+The usage counters themselves were also misleading: the billing page drew two bars for the same
+`aiMessages` allowance, so a workspace at 60 assistant messages and 60 support messages read as
+"60 / 100" twice while it was really at the cap. Assistant and support messages are shown as one
+meter, matching what the API enforces.
+
+Verified live with a throwaway FREE workspace: filling the product catalogue to 50 then adding one
+more returns `402`; filling the month to 100 appointments then booking one more returns `402`
+(`409 booking_unavailable` from the public page, with the owner alert raised once); the WhatsApp
+meter reaches 200 on the send that used to be a no-op and refuses the next with `402`, while an
+inbound customer message still works; and the support widget hands over instead of answering once
+the AI allowance is spent.
+
+Repeating yourself is not punished: a customer who sends three messages about one problem gets one
+ticket and one alert, and the reply says the team is already handling it, instead of three parallel
+tickets for the same request.
 
 ### Integration settings that state the truth
 

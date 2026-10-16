@@ -12,8 +12,8 @@ import {
 } from '@/lib/db/repositories/comms';
 import { findBusinessBySlug, findBusinessById } from '@/lib/db/repositories/accounts';
 import { createCustomer,} from '@/lib/db/repositories/crm';
-import { answerCustomerQuestion, supportWidgetIntro } from '@/lib/ai/support';
-import { incrementUsage } from '@/lib/db/repositories/platform';
+import { answerCustomerQuestion, handoverReply, supportWidgetIntro } from '@/lib/ai/support';
+import { aiAllowanceUsed, incrementUsage, planForBusiness } from '@/lib/db/repositories/platform';
 import { notify } from '@/lib/services/notify';
 import { sendEscalationEmail } from '@/lib/mailer';
 import { all } from '@/lib/db';
@@ -58,21 +58,60 @@ export async function POST(request: Request) {
     incrementUsage(business.id, 'SUPPORT_MESSAGES', 1, { channel: 'WEB_CHAT' });
 
     const conversation = findConversation(business.id, conversationId);
+    const alreadyWithHuman = Boolean(conversation?.needs_human);
+
+    /**
+     * The plan's `aiMessages` allowance covers every AI answer the workspace gets, not only the
+     * staff assistant: the public support widget used to call the model without checking, so the
+     * busiest AI surface was unmetered. Both meters count towards it.
+     */
+    const { plan } = planForBusiness(business.id);
+    const aiUsed = aiAllowanceUsed(business.id);
+    const allowanceSpent = aiUsed > plan.limits.aiMessages;
+
     const history = listMessages(business.id, conversationId, 12).map((message) => ({
       sender: message.sender,
       body: message.body,
     }));
 
-    const reply = await answerCustomerQuestion({
-      businessId: business.id,
-      question: input.message,
-      history,
-      contact: {
-        name: input.name || conversation?.contact_name,
-        email: input.email || conversation?.contact_email,
-        phone: input.phone || conversation?.contact_phone,
-      },
-    });
+    let reply: Awaited<ReturnType<typeof answerCustomerQuestion>>;
+    if (alreadyWithHuman) {
+      // A human is already on this conversation: do not guess an answer over the top of them and
+      // do not raise a second ticket for the same request.
+      reply = handoverReply({
+        message: settings.escalation_message,
+        reason: 'Conversation already escalated to a human.',
+        suffix: 'Someone from the team is already handling this request, so I have added your message to it.',
+      });
+    } else if (allowanceSpent) {
+      reply = handoverReply({
+        message: settings.escalation_message,
+        reason: `AI allowance for this month is used up (${aiUsed} of ${plan.limits.aiMessages}).`,
+        needsContactDetails: !(input.email || input.phone || conversation?.contact_email || conversation?.contact_phone),
+        suffix: 'We are answering with the team instead of the assistant right now.',
+      });
+      if (aiUsed === plan.limits.aiMessages + 1) {
+        await notify({
+          businessId: business.id,
+          type: 'BUSINESS_ALERT',
+          title: 'AI allowance used up — support chat is handing over to humans',
+          body: `All ${plan.limits.aiMessages} AI messages in the ${plan.name} plan are used for this month, so the support widget now answers with your escalation message and opens a ticket instead of using the assistant. Upgrade to keep AI answers on.`,
+          level: 'CRITICAL',
+          href: '/dashboard/billing',
+        });
+      }
+    } else {
+      reply = await answerCustomerQuestion({
+        businessId: business.id,
+        question: input.message,
+        history,
+        contact: {
+          name: input.name || conversation?.contact_name,
+          email: input.email || conversation?.contact_email,
+          phone: input.phone || conversation?.contact_phone,
+        },
+      });
+    }
 
     let finalReply = reply.reply;
 
@@ -92,17 +131,25 @@ export async function POST(request: Request) {
         contactPhone,
       });
 
-      const ticketId = createTicket(business.id, {
-        subject: input.message.slice(0, 120),
-        description: reply.escalateReason ?? 'AI could not answer the customer question.',
-        priority: 'HIGH',
-        escalatedFromAi: true,
-        escalationReason: reply.escalateReason,
-        contactName,
-        contactEmail,
-        contactPhone,
-        conversationId,
-      });
+      // Raise the request once. A customer who writes three times about the same problem needs one
+      // ticket and one alert, not three — the team would otherwise chase the same request in
+      // parallel. The message itself is always stored on the conversation.
+      const ticketId = alreadyWithHuman
+        ? all<{ id: string }>(
+            `SELECT id FROM support_tickets WHERE business_id = ? AND conversation_id = ? ORDER BY created_at DESC LIMIT 1`,
+            [business.id, conversationId],
+          )[0]?.id ?? null
+        : createTicket(business.id, {
+            subject: input.message.slice(0, 120),
+            description: reply.escalateReason ?? 'AI could not answer the customer question.',
+            priority: 'HIGH',
+            escalatedFromAi: true,
+            escalationReason: reply.escalateReason,
+            contactName,
+            contactEmail,
+            contactPhone,
+            conversationId,
+          });
 
       let customerId: string | null = null;
       if (contactEmail || contactPhone) {
@@ -124,19 +171,21 @@ export async function POST(request: Request) {
       }
       if (customerId) updateConversation(business.id, conversationId, { customerId });
 
-      await notify({
-        businessId: business.id,
-        type: 'SUPPORT_ESCALATION',
-        title: `${contactName} needs human assistance`,
-        body: `${input.message.slice(0, 140)} — ticket ${ticketId.slice(-6)}`,
-        level: 'CRITICAL',
-        href: '/dashboard/support',
-        entityType: 'ticket',
-        entityId: ticketId,
-      });
+      if (!alreadyWithHuman) {
+        await notify({
+          businessId: business.id,
+          type: 'SUPPORT_ESCALATION',
+          title: `${contactName} needs human assistance`,
+          body: `${input.message.slice(0, 140)}${ticketId ? ` — ticket ${ticketId.slice(-6)}` : ''}`,
+          level: 'CRITICAL',
+          href: '/dashboard/support',
+          entityType: 'ticket',
+          entityId: ticketId ?? undefined,
+        });
+      }
 
       const handoffEmail = settings.handoff_email || business.email;
-      if (handoffEmail) {
+      if (!alreadyWithHuman && handoffEmail) {
         await sendEscalationEmail({
           to: handoffEmail,
           businessName: business.name,
@@ -144,7 +193,7 @@ export async function POST(request: Request) {
           customerName: contactName,
           customerContact: contactDetail,
           question: input.message,
-          ticketId,
+          ticketId: ticketId ?? '',
         }).catch((error) => console.warn('[support] escalation email failed', error));
       }
 

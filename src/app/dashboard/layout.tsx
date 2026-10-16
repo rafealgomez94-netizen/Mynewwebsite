@@ -6,7 +6,7 @@ import { unreadNotificationCount } from '@/lib/db/repositories/ops';
 import { openConversationCount, countTickets } from '@/lib/db/repositories/comms';
 import { lowStockProducts } from '@/lib/db/repositories/catalog';
 import { overdueTaskCount } from '@/lib/db/repositories/ops';
-import { planForBusiness, usageCount } from '@/lib/db/repositories/platform';
+import { aiAllowanceUsed, planForBusiness } from '@/lib/db/repositories/platform';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,7 +30,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     tickets: countTickets(businessId, 'OPEN'),
     lowStock: lowStockProducts(businessId, 100).length,
     overdueTasks: overdueTaskCount(businessId),
-    aiUsed: usageCount(businessId, 'AI_MESSAGES'),
+    aiUsed: aiAllowanceUsed(businessId),
     aiLimit: plan.limits.aiMessages,
   };
 

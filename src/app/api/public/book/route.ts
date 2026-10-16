@@ -3,13 +3,18 @@ import { assertRateLimit, fail, handleError, ok } from '@/lib/api/http';
 import { publicBookingSchema } from '@/lib/validation';
 import { findBusinessBySlug } from '@/lib/db/repositories/accounts';
 import { findService } from '@/lib/db/repositories/catalog';
-import { createAppointment, findAppointment, bookedSlots } from '@/lib/db/repositories/ops';
+import {
+  bookedSlots,
+  countAppointmentsInMonth,
+  createAppointment,
+  findAppointment,
+} from '@/lib/db/repositories/ops';
 import { createCustomer, updateCustomer } from '@/lib/db/repositories/crm';
 import { all } from '@/lib/db';
 import { notify } from '@/lib/services/notify';
 import { sendAppointmentReminderEmail } from '@/lib/mailer';
 import { formatDateTime } from '@/lib/utils';
-import { incrementUsage } from '@/lib/db/repositories/platform';
+import { planForBusiness } from '@/lib/db/repositories/platform';
 import { HttpError } from '@/lib/auth/rbac';
 
 export const runtime = 'nodejs';
@@ -39,6 +44,32 @@ export async function POST(request: Request) {
       return start.getTime() < bookingEnd && end.getTime() > bookingStart;
     });
     if (overlaps) throw new HttpError(409, 'That time has just been booked. Please pick another slot.', 'slot_taken');
+
+    /**
+     * Plan limit: the business's monthly appointment allowance. This is customer-facing, so it
+     * never mentions plans or billing — the customer is told to contact the business, and the
+     * business is told (once per month, when the allowance is first exhausted) so it can upgrade
+     * instead of quietly losing bookings.
+     */
+    const { plan } = planForBusiness(business.id);
+    const bookedThisMonth = countAppointmentsInMonth(business.id, new Date().toISOString());
+    if (bookedThisMonth >= plan.limits.appointments) {
+      if (bookedThisMonth === plan.limits.appointments) {
+        await notify({
+          businessId: business.id,
+          type: 'BUSINESS_ALERT',
+          title: 'Online booking is full for this month',
+          body: `${plan.name} includes ${plan.limits.appointments} appointments per month and all of them are booked, so new online requests are being turned away. Upgrade the plan or take the booking by phone.`,
+          level: 'CRITICAL',
+          href: '/dashboard/billing',
+        });
+      }
+      return fail(
+        409,
+        `Online booking is not available at the moment. Please ${business.phone ? `call ${business.phone}` : 'contact the business directly'} and the team will help you.`,
+        'booking_unavailable',
+      );
+    }
 
     let customerId: string | null = null;
     if (input.customerEmail || input.customerPhone) {
@@ -95,8 +126,6 @@ export async function POST(request: Request) {
         service: service?.name ?? 'your appointment',
       }).catch((error) => console.warn('[booking] confirmation email failed', error));
     }
-
-    incrementUsage(business.id, 'WHATSAPP_MESSAGES', 0, { channel: 'PUBLIC_BOOKING' });
 
     return ok(
       {

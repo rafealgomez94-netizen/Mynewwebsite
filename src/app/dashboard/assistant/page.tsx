@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { getSessionContext } from '@/lib/auth/session';
 import { requireTenant } from '@/lib/auth/rbac';
 import { ASSISTANT_EXAMPLES, assistantProviderName } from '@/lib/ai/assistant';
-import { planForBusiness, usageCount } from '@/lib/db/repositories/platform';
+import { aiAllowanceUsed, planForBusiness } from '@/lib/db/repositories/platform';
 import { AssistantChat } from '@/components/dashboard/assistant-chat';
 import { PageHeader } from '@/components/dashboard/shared';
 import { Badge } from '@/components/ui';
@@ -29,7 +29,7 @@ export default async function AssistantPage() {
       <AssistantChat
         businessName={ctx.business.name}
         examples={ASSISTANT_EXAMPLES}
-        initialUsage={{ used: usageCount(ctx.business.id, 'AI_MESSAGES'), limit: plan.limits.aiMessages }}
+        initialUsage={{ used: aiAllowanceUsed(ctx.business.id), limit: plan.limits.aiMessages }}
         provider={assistantProviderName()}
       />
     </div>

@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { getSessionContext } from '@/lib/auth/session';
 import { requireTenant } from '@/lib/auth/rbac';
 import { listCampaigns, listPosts, marketingCounts } from '@/lib/db/repositories/content';
-import { planForBusiness, usageCount } from '@/lib/db/repositories/platform';
+import { aiAllowanceUsed, planForBusiness } from '@/lib/db/repositories/platform';
 import { MarketingWorkspace } from '@/components/dashboard/marketing-workspace';
 import { PageHeader } from '@/components/dashboard/shared';
 import { Badge } from '@/components/ui';
@@ -36,7 +36,7 @@ export default async function MarketingPage() {
           approved_count: campaign.approved_count ?? 0,
         }))}
         counts={marketingCounts(ctx.business.id)}
-        usage={{ used: usageCount(ctx.business.id, 'AI_MESSAGES'), limit: plan.limits.aiMessages }}
+        usage={{ used: aiAllowanceUsed(ctx.business.id), limit: plan.limits.aiMessages }}
       />
     </div>
   );

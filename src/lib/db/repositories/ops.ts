@@ -1,4 +1,4 @@
-import { all, get, run, toJson, nowIso, tx, type SqlValue } from '@/lib/db';
+import { all, get, nowIso, run, scalar, toJson, tx, type SqlValue } from '@/lib/db';
 import { newId } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -209,6 +209,18 @@ export function appointmentSummary(businessId: string, sinceIso: string, untilIs
 }
 
 /** Upcoming appointment load per staff member. */
+/**
+ * Appointments booked in a calendar-month window, used for the plan's monthly appointment
+ * allowance. `created_at` is when the booking was made, so re-reading history does not consume
+ * the allowance and cancelling does not free it up again.
+ */
+export function countAppointmentsInMonth(businessId: string, monthIso: string): number {
+  return scalar<number>(
+    `SELECT count(*) AS c FROM appointments WHERE business_id = ? AND substr(created_at, 1, 7) = ?`,
+    [businessId, monthIso.slice(0, 7)],
+  );
+}
+
 export function countAppointmentsByStaff(businessId: string) {
   return all<{ id: string; appointments: number }>(
     `SELECT st.id AS id, count(a.id) AS appointments

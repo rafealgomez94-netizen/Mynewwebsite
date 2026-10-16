@@ -5,7 +5,7 @@ import { listConversations, countTickets } from '@/lib/db/repositories/comms';
 import { listAppointments, listNotifications, listTasks, unreadNotificationCount } from '@/lib/db/repositories/ops';
 import { listCustomers, listLeads } from '@/lib/db/repositories/crm';
 import { recentAiRuns } from '@/lib/db/repositories/knowledge';
-import { planForBusiness, usageCount, type Plan } from '@/lib/db/repositories/platform';
+import { aiAllowanceUsed, planForBusiness, usageCount, type Plan } from '@/lib/db/repositories/platform';
 import { conversationCounts } from '@/lib/db/repositories/comms';
 import { LEAD_STAGE_LABELS, type LeadStage } from '@/lib/domain';
 import { formatDate, formatMoney } from '@/lib/utils';
@@ -139,7 +139,7 @@ export async function buildDashboard(businessId: string, userId: string) {
       currentPeriodEnd: subscription?.current_period_end ?? null,
       trialEndsAt: subscription?.trial_ends_at ?? null,
       usage: {
-        aiMessages: usageCount(businessId, 'AI_MESSAGES'),
+        aiMessages: aiAllowanceUsed(businessId),
         documents: usageCount(businessId, 'DOCUMENTS'),
         supportMessages: usageCount(businessId, 'SUPPORT_MESSAGES'),
       },

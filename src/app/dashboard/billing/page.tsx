@@ -15,6 +15,31 @@ export default async function BillingPage() {
   const { plan, subscription, entitlement, subscribedPlanCode } = planForBusiness(ctx.business.id);
   const provider = process.env.PAYMENT_PROVIDER || 'manual';
 
+  /**
+   * Usage rows for the meter list. AI messages from the staff assistant and from the public support
+   * widget draw on the same `aiMessages` allowance in the API, so they are shown as one meter —
+   * two bars each reading "60 / 100" would hide the moment the workspace actually runs out.
+   */
+  const snapshot = usageSnapshot(ctx.business.id);
+  const limitFor: Record<string, number> = {
+    CUSTOMERS: plan.limits.customers,
+    DOCUMENTS: plan.limits.documents,
+    AI_MESSAGES: plan.limits.aiMessages,
+    STORAGE_BYTES: plan.limits.storageMb * 1024 * 1024,
+    SUPPORT_MESSAGES: plan.limits.aiMessages,
+    WHATSAPP_MESSAGES: plan.limits.whatsappMessages,
+  };
+  const aiMessages = snapshot
+    .filter((row) => row.metric === 'AI_MESSAGES' || row.metric === 'SUPPORT_MESSAGES')
+    .reduce((total, row) => total + row.count, 0);
+  const usageRows = snapshot
+    .filter((row) => row.metric !== 'SUPPORT_MESSAGES')
+    .map((row) => ({
+      metric: row.metric,
+      quantity: row.metric === 'AI_MESSAGES' ? aiMessages : row.count,
+      limit: limitFor[row.metric] ?? plan.limits.customers,
+    }));
+
   return (
     <div>
       <PageHeader
@@ -47,24 +72,7 @@ export default async function BillingPage() {
               }
             : null
         }
-        usage={usageSnapshot(ctx.business.id).map((row) => ({
-          metric: row.metric,
-          quantity: row.count,
-          limit:
-            row.metric === 'CUSTOMERS'
-              ? plan.limits.customers
-              : row.metric === 'DOCUMENTS'
-                ? plan.limits.documents
-                : row.metric === 'AI_MESSAGES'
-                  ? plan.limits.aiMessages
-                  : row.metric === 'STORAGE_BYTES'
-                    ? plan.limits.storageMb * 1024 * 1024
-                    : row.metric === 'SUPPORT_MESSAGES'
-                      ? plan.limits.aiMessages
-                      : row.metric === 'WHATSAPP_MESSAGES'
-                        ? plan.limits.whatsappMessages
-                        : plan.limits.customers,
-        }))}
+        usage={usageRows}
         counts={{ customers: countCustomers(ctx.business.id), users: countMembers(ctx.business.id) }}
         payments={{
           provider,

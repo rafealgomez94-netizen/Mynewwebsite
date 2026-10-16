@@ -5,6 +5,7 @@ import { getSessionContext } from '@/lib/auth/session';
 import { assertPermission, HttpError, requireTenant } from '@/lib/auth/rbac';
 import { addMessage, findConversation, listMessages, updateConversation } from '@/lib/db/repositories/comms';
 import { answerCustomerQuestion } from '@/lib/ai/support';
+import { incrementUsage, planForBusiness, usageCount } from '@/lib/db/repositories/platform';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,6 +66,27 @@ export async function POST(request: Request, { params }: Params) {
     }
 
     const input = conversationMessageSchema.parse(body);
+
+    /**
+     * WhatsApp messages are a metered allowance on every plan (Free includes 200 a month). The
+     * counter used to be written with a quantity of 0, so it never moved and the limit could never
+     * bite; outbound WhatsApp replies now count against it. Inbound customer messages and public
+     * support chats are never blocked — only what the business sends is metered.
+     */
+    const isWhatsApp = conversation.channel === 'WHATSAPP';
+    if (isWhatsApp) {
+      const { plan } = planForBusiness(ctx.business.id);
+      const sent = usageCount(ctx.business.id, 'WHATSAPP_MESSAGES');
+      if (sent >= plan.limits.whatsappMessages) {
+        throw new HttpError(
+          402,
+          `Your ${plan.name} plan includes ${plan.limits.whatsappMessages} WhatsApp messages per month and ${sent} have been sent. Answer on another channel or upgrade to continue.`,
+          'plan_limit',
+        );
+      }
+      incrementUsage(ctx.business.id, 'WHATSAPP_MESSAGES', 1, { conversationId: id, channel: 'WHATSAPP' });
+    }
+
     addMessage(ctx.business.id, {
       conversationId: id,
       sender: 'STAFF',

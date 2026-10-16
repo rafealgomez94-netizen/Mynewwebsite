@@ -358,6 +358,18 @@ export function usageSnapshot(businessId: string, period = currentPeriodKey()) {
   );
 }
 
+/**
+ * How much of the plan's `aiMessages` allowance this workspace has spent this period. Every AI
+ * answer counts, wherever it came from: the staff assistant, the marketing generator and the public
+ * support widget are metered separately but share the one allowance, so enforcement and every
+ * usage display must read the same number.
+ */
+export function aiAllowanceUsed(businessId: string, period = currentPeriodKey()): number {
+  return (
+    usageCount(businessId, 'AI_MESSAGES', period) + usageCount(businessId, 'SUPPORT_MESSAGES', period)
+  );
+}
+
 export function usageSeries(businessId: string, metric: UsageMetric, days = 30) {
   return all<{ day: string; total: number }>(
     `SELECT substr(created_at, 1, 10) AS day, coalesce(sum(quantity), 0) AS total FROM usage_events

@@ -1,4 +1,4 @@
-import { all, get, nowIso, run, tx } from '@/lib/db';
+import { all, get, nowIso, run, scalar, tx } from '@/lib/db';
 import { newId } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -183,6 +183,14 @@ export function listProducts(
 export function findProduct(businessId: string, id: string) {
   const row = get<ProductRow>(`SELECT * FROM products WHERE business_id = ? AND id = ?`, [businessId, id]);
   return row ? toProduct(row) : undefined;
+}
+
+/**
+ * How many products the workspace has on file. Plan limits for products were advertised on the
+ * plans but never checked by any route, so a Free workspace could store an unbounded catalogue.
+ */
+export function countProducts(businessId: string): number {
+  return scalar<number>(`SELECT count(*) AS c FROM products WHERE business_id = ?`, [businessId]);
 }
 
 export function findProductRow(businessId: string, id: string): ProductRow | undefined {

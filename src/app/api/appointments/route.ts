@@ -5,12 +5,14 @@ import { getSessionContext } from '@/lib/auth/session';
 import { assertPermission, HttpError, requireTenant } from '@/lib/auth/rbac';
 import {
   appointmentSummary,
+  countAppointmentsInMonth,
   createAppointment,
   deleteAppointment,
   findAppointment,
   listAppointments,
   updateAppointment,
 } from '@/lib/db/repositories/ops';
+import { planForBusiness } from '@/lib/db/repositories/platform';
 import { availableSlots } from '@/lib/services/scheduling';
 import { parseMoneyToCents } from '@/lib/utils';
 import { audit, notify } from '@/lib/services/notify';
@@ -100,6 +102,17 @@ export async function POST(request: Request) {
       throw new HttpError(422, 'Provide a valid start and end time.', 'invalid_time');
     }
     if (end <= start) throw new HttpError(422, 'The end time must be after the start time.', 'invalid_time');
+
+    // Plan limit: appointments are counted per calendar month, when the booking is made.
+    const { plan } = planForBusiness(ctx.business.id);
+    const bookedThisMonth = countAppointmentsInMonth(ctx.business.id, new Date().toISOString());
+    if (bookedThisMonth >= plan.limits.appointments) {
+      throw new HttpError(
+        402,
+        `Your ${plan.name} plan includes ${plan.limits.appointments} appointments per month and ${bookedThisMonth} are already booked. Upgrade to keep taking bookings.`,
+        'plan_limit',
+      );
+    }
 
     await assertNoConflict({
       businessId: ctx.business.id,

@@ -29,7 +29,8 @@ export type SupportReply = {
   escalated: boolean;
   escalateReason?: string;
   sources: { title: string; snippet: string; kind: string; score: number }[];
-  provider: 'openai-compatible' | 'builtin-knowledge';
+  /** `handover` means no model was called: the reply is the business's escalation message. */
+  provider: 'openai-compatible' | 'builtin-knowledge' | 'handover';
   model: string | null;
   tokensIn: number;
   tokensOut: number;
@@ -38,6 +39,33 @@ export type SupportReply = {
 };
 
 const ESCALATE_TOKEN = 'ESCALATE';
+
+/**
+ * A reply that deliberately never called a model — the customer gets the business's own escalation
+ * message and a human request, not an invented answer. Used when a person is already handling the
+ * conversation and when the plan's AI allowance for the month is spent.
+ */
+export function handoverReply(input: {
+  message: string | null | undefined;
+  reason: string;
+  needsContactDetails?: boolean;
+  suffix?: string;
+}): SupportReply {
+  const message = (input.message ?? '').trim() || 'Let me get a member of our team to help you with that.';
+  return {
+    reply: input.suffix ? `${message} ${input.suffix}` : message,
+    escalated: true,
+    needsContactDetails: input.needsContactDetails ?? false,
+    escalateReason: input.reason,
+    confidence: 0,
+    provider: 'handover',
+    model: null,
+    tokensIn: 0,
+    tokensOut: 0,
+    latencyMs: 0,
+    sources: [],
+  };
+}
 
 function dayName(date: Date): string {
   return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][date.getUTCDay()];

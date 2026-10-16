@@ -43,6 +43,14 @@ const ISOLATION_EMAIL = `smoke-isolation-${STAMP}@example.test`;
 const SEAT_A_EMAIL = `smoke-seat-a-${STAMP}@example.test`;
 const SEAT_B_EMAIL = `smoke-seat-b-${STAMP}@example.test`;
 
+/**
+ * Free-plan allowances, read from db/plans.json rather than duplicated: if the catalogue changes,
+ * this check follows it instead of drifting into a false pass.
+ */
+const PLAN_LIMITS_FREE = JSON.parse(
+  fs.readFileSync(path.join(process.cwd(), 'db', 'plans.json'), 'utf8'),
+).plans.find((plan) => plan.code === 'FREE').limits;
+
 const results = [];
 const created = { businessIds: [], userIds: [] };
 
@@ -1196,6 +1204,80 @@ await check('support settings can be read and updated', async () => {
   eq(updated.status, 200, 'PATCH support settings');
 });
 
+await check('a second message about the same problem does not open a second ticket', async () => {
+  const profile = await owner.get('/api/business/profile');
+  const slug = (profile.json.data.businesses ?? []).find((entry) => entry.id === businessId)?.slug;
+  const db = new DatabaseSync(dbFilePath());
+  const ticketsBefore = db.prepare('SELECT count(*) AS c FROM support_tickets WHERE business_id = ?').get(businessId).c;
+  const alertsBefore = db.prepare(`SELECT count(*) AS c FROM notifications WHERE business_id = ? AND type = 'SUPPORT_ESCALATION'`).get(businessId).c;
+
+  // The public widget's AI allowance is spent, so this conversation can only be handed to a human.
+  const periodKey = new Date().toISOString().slice(0, 7);
+  const priorMeter = db.prepare(
+    `SELECT count FROM usage_counters WHERE business_id = ? AND metric = 'AI_MESSAGES' AND period_key = ?`,
+  ).get(businessId, periodKey)?.count ?? null;
+
+  try {
+    db.prepare(
+      `INSERT INTO usage_counters (id, business_id, metric, period_key, count, updated_at) VALUES (?, ?, 'AI_MESSAGES', ?, ?, ?)
+       ON CONFLICT(business_id, metric, period_key) DO UPDATE SET count = excluded.count`,
+    ).run(`usg_smoke_${STAMP}_ai`, businessId, periodKey, PLAN_LIMITS_FREE.aiMessages + 1, new Date().toISOString());
+
+    const first = await anon.post('/api/support/public', {
+      businessSlug: slug,
+      message: 'I am disputing a charge from last month that nobody has explained to me and I need someone to call me.',
+    });
+    eq(first.status, 200, 'the customer is never shown an error when the allowance is spent');
+    eq(first.json.data.escalated, true, 'the widget hands over instead of answering');
+    assert(first.json.data.needsContactDetails === true, 'the handover did not ask for contact details');
+
+    const conversationId = first.json.data.conversationId;
+    const db2 = new DatabaseSync(dbFilePath());
+    const ticketsAfter = db2.prepare('SELECT count(*) AS c FROM support_tickets WHERE business_id = ?').get(businessId).c;
+    const alertsAfter = db2.prepare(`SELECT count(*) AS c FROM notifications WHERE business_id = ? AND type = 'SUPPORT_ESCALATION'`).get(businessId).c;
+    eq(ticketsAfter, ticketsBefore + 1, 'exactly one ticket for the request');
+    eq(alertsAfter, alertsBefore + 1, 'exactly one alert for the request');
+    const aiMessage = db2.prepare(
+      `SELECT meta_json FROM messages WHERE business_id = ? AND conversation_id = ? AND sender = 'AI' ORDER BY created_at DESC LIMIT 1`,
+    ).get(businessId, conversationId);
+    assert(/handover/.test(aiMessage?.meta_json ?? ''), `no model should have answered, got ${aiMessage?.meta_json}`);
+    db2.close();
+
+    const second = await anon.post('/api/support/public', {
+      businessSlug: slug,
+      conversationId,
+      message: 'Nobody has called me about that charge and I am still waiting.',
+    });
+    eq(second.status, 200, 'the follow-up is accepted');
+    eq(second.json.data.escalated, true, 'the follow-up stays with the human queue');
+    assert(/already handling/i.test(String(second.json.data.reply)), 'the customer was not told the team is already on it');
+
+    const db3 = new DatabaseSync(dbFilePath());
+    eq(
+      db3.prepare('SELECT count(*) AS c FROM support_tickets WHERE business_id = ?').get(businessId).c,
+      ticketsBefore + 1,
+      'the follow-up did not open a second ticket',
+    );
+    eq(
+      db3.prepare(`SELECT count(*) AS c FROM notifications WHERE business_id = ? AND type = 'SUPPORT_ESCALATION'`).get(businessId).c,
+      alertsBefore + 1,
+      'the follow-up did not raise a second alert',
+    );
+    db3.close();
+    return 'one ticket and one alert per request, handover while the allowance is spent';
+  } finally {
+    // Leave the meter as the AI checks that follow expect to find it.
+    if (priorMeter === null) {
+      db.prepare(`DELETE FROM usage_counters WHERE business_id = ? AND metric = 'AI_MESSAGES' AND period_key = ?`).run(businessId, periodKey);
+    } else {
+      db.prepare(
+        `UPDATE usage_counters SET count = ? WHERE business_id = ? AND metric = 'AI_MESSAGES' AND period_key = ?`,
+      ).run(priorMeter, businessId, periodKey);
+    }
+    db.close();
+  }
+});
+
 await check('public support answers from the uploaded price list', async () => {
   const profile = await owner.get('/api/business/profile');
   const slug = (profile.json.data.businesses ?? []).find((entry) => entry.id === businessId)?.slug;
@@ -1431,6 +1513,134 @@ await check('content calendar is generated', async () => {
 // ---------------------------------------------------------------------------
 // 12. Documents and reports with PDF export
 // ---------------------------------------------------------------------------
+await check('product, appointment and WhatsApp allowances are enforced, not just advertised', async () => {
+  // Three limits existed on every plan and were checked by nothing: `products` and `appointments`
+  // appeared in no route at all, and `whatsappMessages` was written with a quantity of 0 so the
+  // meter never moved. A workspace can only reach these caps by having real records, so the suite
+  // fills the tenant directly and pushes past the boundary through the API.
+  const db = new DatabaseSync(dbFilePath());
+  const billing = await owner.get('/api/billing');
+  const businessId = billing.json.data.subscription?.business_id;
+  assert(businessId, 'no tenant for the allowance check');
+  const original = db.prepare('SELECT * FROM subscriptions WHERE business_id = ?').get(businessId);
+  const setPlan = (code) =>
+    db.prepare(`UPDATE subscriptions SET plan_code = ? WHERE business_id = ?`).run(code, businessId);
+  const now = new Date();
+  const nowIsoValue = now.toISOString();
+  const month = nowIsoValue.slice(0, 7);
+  const free = PLAN_LIMITS_FREE;
+  const results = [];
+  // The suite's slug is generated from the workspace name, not the SLUG constant, so read it back.
+  const profile = await owner.get('/api/business/profile');
+  const tenantSlug = (profile.json?.data?.businesses ?? []).find((entry) => entry.id === businessId)?.slug;
+  assert(tenantSlug, 'could not resolve the suite tenant slug for the public booking check');
+
+  try {
+    setPlan('FREE');
+
+    // 1. Products — a total catalogue cap.
+    const productsBefore = db.prepare('SELECT count(*) AS c FROM products WHERE business_id = ?').get(businessId).c;
+    const insertProduct = db.prepare(
+      `INSERT INTO products (id, business_id, name, sku, category, quantity, cost_cents, price_cents, min_stock, unit, active, units_sold, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'Smoke', 1, 100, 200, 0, 'unit', 1, 0, ?, ?)`,
+    );
+    for (let i = productsBefore; i < free.products - 1; i += 1) {
+      insertProduct.run(`prd_smoke_${STAMP}_${i}`, businessId, `Smoke product ${i}`, `SM-${i}`, nowIsoValue, nowIsoValue);
+    }
+    const lastProduct = await owner.post('/api/products', {
+      name: 'Allowance boundary product', sku: `SM-LAST-${STAMP}`, price: '10.00', cost: '5.00', quantity: 1, minStock: 0,
+    });
+    eq(lastProduct.status, 201, 'the product that fills the allowance');
+    const overProduct = await owner.post('/api/products', {
+      name: 'Product past the allowance', sku: `SM-OVER-${STAMP}`, price: '10.00', cost: '5.00', quantity: 1, minStock: 0,
+    });
+    eq(overProduct.status, 402, 'the product past the allowance');
+    eq(overProduct.json?.error?.code, 'plan_limit', 'product refusal code');
+    results.push(`products: ${free.products} cap`);
+
+    // 2. Appointments — a per-calendar-month cap.
+    const appointmentsBefore = db.prepare(
+      `SELECT count(*) AS c FROM appointments WHERE business_id = ? AND substr(created_at, 1, 7) = ?`,
+    ).get(businessId, month).c;
+    const insertAppointment = db.prepare(
+      `INSERT INTO appointments (id, business_id, title, start_at, end_at, status, price_cents, source, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'PENDING', 0, 'DASHBOARD', ?, ?)`,
+    );
+    for (let i = appointmentsBefore; i < free.appointments - 1; i += 1) {
+      const start = new Date(Date.now() + (i + 1) * 36e5).toISOString();
+      insertAppointment.run(
+        `apt_smoke_${STAMP}_${i}`, businessId, `Smoke booking ${i}`, start,
+        new Date(new Date(start).getTime() + 36e5).toISOString(), nowIsoValue, nowIsoValue,
+      );
+    }
+    const lastBooking = await owner.post('/api/appointments', {
+      title: `Allowance boundary booking ${STAMP}`,
+      startAt: new Date(Date.now() + 400 * 36e5).toISOString(),
+      endAt: new Date(Date.now() + 401 * 36e5).toISOString(),
+      status: 'PENDING',
+    });
+    eq(lastBooking.status, 201, 'the booking that fills the monthly allowance');
+    const overBooking = await owner.post('/api/appointments', {
+      title: `Booking past the allowance ${STAMP}`,
+      startAt: new Date(Date.now() + 900 * 36e5).toISOString(),
+      endAt: new Date(Date.now() + 901 * 36e5).toISOString(),
+      status: 'PENDING',
+    });
+    eq(overBooking.status, 402, 'the booking past the monthly allowance');
+    eq(overBooking.json?.error?.code, 'plan_limit', 'appointment refusal code');
+    results.push(`appointments: ${free.appointments}/month cap`);
+
+    // 3. WhatsApp — metered on what the business sends, never on what customers send.
+    const conversationId = `cnv_smoke_${STAMP}`;
+    db.prepare(
+      `INSERT INTO conversations (id, business_id, channel, subject, status, contact_name, contact_phone, is_ai_handled, needs_human, unread_for_business, last_message_at, created_at, updated_at)
+       VALUES (?, ?, 'WHATSAPP', 'Smoke WhatsApp thread', 'OPEN', 'Smoke Customer', '0775550100', 0, 0, 0, ?, ?, ?)`,
+    ).run(conversationId, businessId, nowIsoValue, nowIsoValue, nowIsoValue);
+    db.prepare(
+      `INSERT INTO usage_counters (id, business_id, metric, period_key, count, updated_at)
+       VALUES (?, ?, 'WHATSAPP_MESSAGES', ?, ?, ?)
+       ON CONFLICT(business_id, metric, period_key) DO UPDATE SET count = excluded.count`,
+    ).run(`usg_smoke_${STAMP}`, businessId, month, free.whatsappMessages - 1, nowIsoValue);
+
+    const sentLast = await owner.post(`/api/conversations/${conversationId}/messages`, { mode: 'reply', body: 'Inside the allowance' });
+    eq(sentLast.status, 200, 'the WhatsApp message that fills the allowance');
+    const counter = db.prepare(
+      `SELECT count FROM usage_counters WHERE business_id = ? AND metric = 'WHATSAPP_MESSAGES' AND period_key = ?`,
+    ).get(businessId, month).count;
+    eq(counter, free.whatsappMessages, 'sending it moved the meter');
+    const overMessage = await owner.post(`/api/conversations/${conversationId}/messages`, { mode: 'reply', body: 'Past the allowance' });
+    eq(overMessage.status, 402, 'the WhatsApp message past the allowance');
+    eq(overMessage.json?.error?.code, 'plan_limit', 'WhatsApp refusal code');
+    results.push(`whatsapp: ${free.whatsappMessages}/month cap, inbound never blocked`);
+
+    // 4. The public booking page must refuse a customer without talking about plans.
+    const publicBook = await anon.post('/api/public/book', {
+      businessSlug: tenantSlug,
+      customerName: 'Smoke Overflow Customer',
+      customerPhone: '0775550101',
+      startAt: new Date(Date.now() + 920 * 36e5).toISOString(),
+    });
+    eq(publicBook.status, 409, 'public booking at the monthly cap');
+    eq(publicBook.json?.error?.code, 'booking_unavailable', 'public refusal code');
+    assert(
+      !/plan|upgrade|allowance/i.test(publicBook.json?.error?.message ?? ''),
+      `the public refusal mentioned the plan: ${publicBook.json?.error?.message}`,
+    );
+    const alerts = db.prepare(
+      `SELECT count(*) AS c FROM notifications WHERE business_id = ? AND title = 'Online booking is full for this month'`,
+    ).get(businessId).c;
+    assert(alerts >= 1, 'the business was not warned that online bookings are being turned away');
+    results.push('public booking refused politely, owner alerted');
+
+    return results.join(' · ');
+  } finally {
+    db.prepare(
+      `UPDATE subscriptions SET plan_code = ?, status = ?, cancel_at_period_end = ?, current_period_start = ?, current_period_end = ? WHERE business_id = ?`,
+    ).run(original.plan_code, original.status, original.cancel_at_period_end, original.current_period_start, original.current_period_end, businessId);
+    db.close();
+  }
+});
+
 await check('free-plan document limits are enforced with a clear message', async () => {
   // The tenant is still on FREE (10 documents) and has already indexed knowledge
   // sources, which count towards the same allowance — so generating in a loop

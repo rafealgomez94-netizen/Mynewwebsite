@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { handleError, ok, parseBody } from '@/lib/api/http';
 import { productSchema, stockAdjustSchema } from '@/lib/validation';
 import { getSessionContext } from '@/lib/auth/session';
-import { assertPermission, requireTenant } from '@/lib/auth/rbac';
+import { assertPermission, HttpError, requireTenant } from '@/lib/auth/rbac';
 import {
+  countProducts,
   createProduct,
   deleteProduct,
   inventoryValue,
@@ -14,6 +15,7 @@ import {
 } from '@/lib/db/repositories/catalog';
 import { parseMoneyToCents } from '@/lib/utils';
 import { notify } from '@/lib/services/notify';
+import { planForBusiness } from '@/lib/db/repositories/platform';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,6 +45,17 @@ export async function POST(request: Request) {
     const ctx = requireTenant(await getSessionContext());
     assertPermission(ctx, 'products:write');
     const input = await parseBody(request, productSchema);
+
+    // Plan limit: the catalogue size is capped per plan (Free includes 50 products).
+    const { plan } = planForBusiness(ctx.business.id);
+    if (countProducts(ctx.business.id) >= plan.limits.products) {
+      throw new HttpError(
+        402,
+        `Your ${plan.name} plan includes ${plan.limits.products} products. Upgrade to add more.`,
+        'plan_limit',
+      );
+    }
+
     const product = createProduct(ctx.business.id, {
       name: input.name,
       sku: input.sku || null,

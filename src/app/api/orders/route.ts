@@ -3,7 +3,15 @@ import { handleError, ok, parseBody } from '@/lib/api/http';
 import { orderSchema } from '@/lib/validation';
 import { getSessionContext } from '@/lib/auth/session';
 import { assertPermission, requireTenant } from '@/lib/auth/rbac';
-import { createOrder, findOrder, listOrders, revenueSummary, topSellingItems, updateOrderStatus } from '@/lib/db/repositories/catalog';
+import {
+  createOrder,
+  findOrder,
+  findProduct,
+  listOrders,
+  revenueSummary,
+  topSellingItems,
+  updateOrderStatus,
+} from '@/lib/db/repositories/catalog';
 import { parseMoneyToCents } from '@/lib/utils';
 import { notify } from '@/lib/services/notify';
 
@@ -57,6 +65,29 @@ export async function POST(request: Request) {
         unitPriceCents: parseMoneyToCents(item.unitPrice),
       })),
     });
+
+    // Selling is the most common way stock runs out, so the low-stock alert has to
+    // fire from here too — the products API only covers creating a product and
+    // correcting a level by hand. Only the crossing is announced: an item that was
+    // already below its minimum was reported when it got there.
+    for (const item of order.items) {
+      if (item.itemType !== 'PRODUCT' || !item.itemId) continue;
+      const product = findProduct(ctx.business.id, item.itemId);
+      if (!product) continue;
+      const quantityBefore = product.quantity + item.quantity;
+      if (product.quantity <= product.minStock && quantityBefore > product.minStock) {
+        await notify({
+          businessId: ctx.business.id,
+          type: 'LOW_INVENTORY',
+          title: `Low stock: ${product.name}`,
+          body: `Sold ${item.quantity} on order ${order.orderNumber} — ${product.quantity} left (minimum ${product.minStock}).`,
+          level: product.quantity <= 0 ? 'CRITICAL' : 'WARNING',
+          href: '/dashboard/inventory',
+          entityType: 'product',
+          entityId: product.id,
+        });
+      }
+    }
 
     if (input.customerId) {
       await notify({

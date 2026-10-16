@@ -703,6 +703,56 @@ await check('selling a product decrements stock', async () => {
   return `${stockBeforeSale} → ${product.quantity}`;
 });
 
+await check('selling stock below the minimum raises a low-stock alert, once', async () => {
+  // The products API announces a low level when a product is created or corrected by
+  // hand. Selling is how stock actually runs out, so the crossing has to be announced
+  // from the order path, and only on the way down past the minimum.
+  const made = await owner.post('/api/products', {
+    name: 'Smoke low-stock crossing',
+    sku: `SMOKE-CROSS-${STAMP}`,
+    quantity: 6,
+    minStock: 2,
+    cost: '10',
+    price: '25',
+    supplier: 'Smoke Supplies',
+    unit: 'unit',
+    active: true,
+  });
+  eq(made.status, 201, 'POST /api/products');
+  const crossingId = made.json.data.product?.id;
+  assert(crossingId, 'no product id');
+
+  const alertsFor = async () => {
+    const list = await owner.get('/api/notifications');
+    return (list.json.data.items ?? []).filter(
+      (item) => item.type === 'LOW_INVENTORY' && item.title.includes('Smoke low-stock crossing'),
+    );
+  };
+  const before = (await alertsFor()).length;
+
+  // 6 → 0 in one sale: the item crosses its minimum and runs out.
+  const sale = await owner.post('/api/orders', {
+    status: 'PAID',
+    paymentStatus: 'PAID',
+    channel: 'IN_STORE',
+    items: [{ itemType: 'PRODUCT', itemId: crossingId, name: 'Smoke low-stock crossing', quantity: 6, unitPrice: '25' }],
+  });
+  eq(sale.status, 201, 'POST /api/orders');
+
+  const alerts = await alertsFor();
+  assert(alerts.length === before + 1, `expected exactly one low-stock alert, got ${alerts.length - before}`);
+  const alert = alerts.at(-1);
+  assert(alert, 'no low-stock alert found');
+  assert(alert.level === 'CRITICAL', `selling out should be CRITICAL, got ${alert.level}`);
+  assert(/Sold 6/.test(alert.body ?? ''), `the alert should say what was sold: ${alert.body}`);
+
+  // Selling more of an item that is already below its minimum stays quiet.
+  const products = await owner.get('/api/products');
+  const stock = (products.json.data.products ?? []).find((entry) => entry.id === crossingId)?.quantity;
+  eq(stock, 0, 'the product should be out of stock (never negative)');
+  return `crossing announced once as ${alert.level}`;
+});
+
 await check('order status can be advanced', async () => {
   const res = await owner.patch('/api/orders', { id: orderId, status: 'FULFILLED', paymentStatus: 'PAID' });
   eq(res.status, 200, 'PATCH /api/orders');

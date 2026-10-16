@@ -146,7 +146,7 @@ npm run build && npm start
 tenant up, verifies the email, onboards the business, then exercises catalog, inventory,
 CRM, pipeline, orders, appointments, public booking, tasks, conversations, support, the
 knowledge base, both AI surfaces, marketing approval, documents + PDFs, reports, analytics,
-billing, invitations, RBAC and tenant isolation — **92 checks in total**. It creates its own
+billing, invitations, RBAC and tenant isolation — **93 checks in total**. It creates its own
 tenant and accounts (`smoke-*@example.test`) and deletes them again on the way out, so it is
 safe to run against a development database.
 
@@ -286,7 +286,7 @@ Every mutating API route resolves the session, requires tenant membership, check
 
 - `npm run typecheck` — clean (TypeScript strict, 0 errors).
 - A clean production build (`next build`) compiles every route, and `next start` serves it without leaking the development email tokens (verified: `devUrl` is absent in production responses, `307`/`401` guards still apply, public support still answers).
-- `npm run smoke` — **92 / 92 checks pass**, against the running app (last full run: signup →
+- `npm run smoke` — **93 / 93 checks pass**, against the running app (last full run: signup →
   verification → onboarding → catalog → stock movements → CRM → pipeline → orders →
   appointments → public booking → tasks → conversations → support → knowledge → AI assistant
   → marketing → documents → reports → analytics → billing → invitations → RBAC → tenant
@@ -471,6 +471,22 @@ maps it to `503 storage_unavailable`, and the message names every variable to co
 (`STORAGE_S3_BUCKET`, `STORAGE_S3_REGION`, `STORAGE_S3_ACCESS_KEY_ID`,
 `STORAGE_S3_SECRET_ACCESS_KEY`). The local driver remains the default and is what the verification
 runs use.
+
+
+### Low stock is announced when a sale causes it
+
+Low-stock notifications were only raised on two paths: creating a product below its minimum, and
+correcting a level by hand in the inventory workspace. Selling was not one of them — the most
+common way stock actually runs out — so a shop could sell its last three units and hear nothing
+until someone opened the inventory page. `POST /api/orders` now checks every product it sold and
+announces the items that crossed their minimum, with the sale in the message ("Sold 6 on order
+ORD-00012 — 2 left (minimum 3)"). Selling out entirely is `CRITICAL`; the rest is `WARNING`.
+
+Only the crossing is announced: an item that is already below its minimum was reported when it got
+there, so repeat sales do not produce repeat alerts. Verified over HTTP in four cases — the
+crossing, a second sale while already low, selling out, and a healthy sale that stays quiet — and
+pinned by a smoke check that sells a product from 6 to 0 and asserts exactly one `CRITICAL` alert
+carrying the quantity sold, with stock never going below zero.
 
 
 ---
